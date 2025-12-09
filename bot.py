@@ -81,10 +81,12 @@ async def main():
     # Register handlers
     from handlers import registration, menu, lot_creation, admin, auction
 
-    # Important: Register state-based routers first to handle FSM states
-    dp.include_router(auction.router)
-    dp.include_router(lot_creation.router)
+    # IMPORTANT: Register registration router FIRST to handle commands like /start
     dp.include_router(registration.router)
+
+    # Then register state-based routers to handle FSM states
+    dp.include_router(lot_creation.router)
+    dp.include_router(auction.router)
 
     # Then register general routers
     dp.include_router(admin.router)

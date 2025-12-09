@@ -17,10 +17,10 @@ async def schedule_auction_completion(lot_id: int, end_time: datetime):
         id=f"auction_{lot_id}_complete"
     )
 
-    # Schedule updates
-    intervals = [120, 90, 60, 30, 10, 5]  # minutes before end
+    # Schedule channel updates (every 30 min and at key moments)
+    update_intervals = [120, 90, 60, 30]  # minutes before end
 
-    for minutes in intervals:
+    for minutes in update_intervals:
         update_time = end_time - timedelta(minutes=minutes)
         if update_time > datetime.now():
             scheduler.add_job(
@@ -29,6 +29,61 @@ async def schedule_auction_completion(lot_id: int, end_time: datetime):
                 args=[lot_id],
                 id=f"auction_{lot_id}_update_{minutes}"
             )
+
+    # Schedule participant notifications before auction ends
+    notification_intervals = [10, 5]  # notify participants 10 and 5 minutes before end
+
+    for minutes in notification_intervals:
+        notification_time = end_time - timedelta(minutes=minutes)
+        if notification_time > datetime.now():
+            scheduler.add_job(
+                notify_participants_before_end,
+                DateTrigger(run_date=notification_time),
+                args=[lot_id, minutes],
+                id=f"auction_{lot_id}_notify_{minutes}"
+            )
+
+
+async def notify_participants_before_end(lot_id: int, minutes_left: int):
+    """Notify all auction participants that auction is ending soon"""
+    from bot import bot
+
+    lot = await db.get_lot(lot_id)
+    if not lot:
+        return
+
+    # Get all participants
+    participants = await db.get_lot_participants(lot_id)
+
+    # Get current price and leader
+    current_price = lot.get('current_price') or lot['start_price']
+    leader_id = lot.get('leader_id')
+
+    for participant_id in participants:
+        try:
+            # Different message for leader vs others
+            if participant_id == leader_id:
+                await bot.send_message(
+                    chat_id=participant_id,
+                    text=f"⏰ <b>Торги скоро завершатся!</b>\n\n"
+                         f"📦 <b>Лот:</b> {lot['description']}\n"
+                         f"💰 <b>Ваша ставка:</b> {int(current_price):,} сум\n"
+                         f"🥇 <b>Вы лидируете!</b>\n\n"
+                         f"⏱ До завершения осталось: <b>{minutes_left} минут</b>",
+                    parse_mode="HTML"
+                )
+            else:
+                await bot.send_message(
+                    chat_id=participant_id,
+                    text=f"⏰ <b>Торги скоро завершатся!</b>\n\n"
+                         f"📦 <b>Лот:</b> {lot['description']}\n"
+                         f"💰 <b>Текущая ставка:</b> {int(current_price):,} сум\n"
+                         f"💡 У вас ещё есть время перебить ставку!\n\n"
+                         f"⏱ До завершения осталось: <b>{minutes_left} минут</b>",
+                    parse_mode="HTML"
+                )
+        except Exception as e:
+            print(f"Failed to notify participant {participant_id}: {e}")
 
 
 async def update_auction_status(lot_id: int):

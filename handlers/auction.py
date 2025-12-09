@@ -14,6 +14,92 @@ router = Router()
 logger = logging.getLogger(__name__)
 
 
+@router.callback_query(F.data.startswith("buy:"))
+async def handle_buy(callback: CallbackQuery, state: FSMContext):
+    """Handle purchase of item at fixed price"""
+    lot_id = int(callback.data.split(":")[1])
+
+    lot = await db.get_lot(lot_id)
+
+    if not lot:
+        await callback.answer("Лот не найден!", show_alert=True)
+        return
+
+    if lot['status'] not in ['approved', 'active']:
+        await callback.answer("Товар недоступен!", show_alert=True)
+        return
+
+    if lot.get('lot_type') != 'regular':
+        await callback.answer("Это не обычная продажа!", show_alert=True)
+        return
+
+    # Check if already sold
+    if lot.get('leader_id'):
+        await callback.answer("Товар уже продан!", show_alert=True)
+        return
+
+    from bot import bot
+    from utils import get_photos_list, create_media_group
+
+    # Mark as sold
+    await db.update_lot_field(lot_id, 'leader_id', callback.from_user.id)
+    await db.update_lot_status(lot_id, 'finished')
+
+    # Get seller and buyer info
+    seller = await db.get_user(lot['owner_id'])
+    buyer = await db.get_user(callback.from_user.id)
+
+    seller_username = f"@{seller['username']}" if seller.get('username') else "нет username"
+    buyer_username = f"@{buyer['username']}" if buyer.get('username') else "нет username"
+
+    # Notify buyer
+    try:
+        await bot.send_message(
+            chat_id=callback.from_user.id,
+            text=f"✅ <b>Вы купили букет!</b>\n\n"
+                 f"📦 <b>Товар:</b> {lot['description']}\n"
+                 f"💰 <b>Цена:</b> {int(lot['start_price']):,} сум\n"
+                 f"🏙️ <b>Город:</b> {lot['city']}\n\n"
+                 f"👤 <b>Контакт продавца:</b>\n"
+                 f"Имя: {seller['name']}\n"
+                 f"Username: {seller_username}\n"
+                 f"Телефон: {seller['phone']}\n\n"
+                 f"💬 Свяжитесь с продавцом для получения товара и оплаты",
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        logger.error(f"Failed to notify buyer: {e}")
+
+    # Notify seller
+    try:
+        await bot.send_message(
+            chat_id=lot['owner_id'],
+            text=f"🎉 <b>Ваш букет продан!</b>\n\n"
+                 f"📦 <b>Товар:</b> {lot['description']}\n"
+                 f"💰 <b>Цена:</b> {int(lot['start_price']):,} сум\n\n"
+                 f"👤 <b>Контакт покупателя:</b>\n"
+                 f"Имя: {buyer['name']}\n"
+                 f"Username: {buyer_username}\n"
+                 f"Телефон: {buyer['phone']}\n\n"
+                 f"💬 Свяжитесь с покупателем для передачи товара и получения оплаты",
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        logger.error(f"Failed to notify seller: {e}")
+
+    # Delete from channel
+    if lot.get('channel_message_id'):
+        try:
+            await bot.delete_message(
+                chat_id=config.CHANNEL_ID,
+                message_id=lot['channel_message_id']
+            )
+        except Exception as e:
+            logger.error(f"Failed to delete channel message: {e}")
+
+    await callback.answer("✅ Вы купили этот букет! Проверьте сообщения от бота.")
+
+
 @router.callback_query(F.data.startswith("participate:"))
 async def handle_participate(callback: CallbackQuery, state: FSMContext):
     """Handle participation in auction"""
@@ -27,6 +113,10 @@ async def handle_participate(callback: CallbackQuery, state: FSMContext):
 
     if lot['status'] not in ['approved', 'active']:
         await callback.answer("Аукцион недоступен!", show_alert=True)
+        return
+
+    if lot.get('lot_type') != 'auction':
+        await callback.answer("Это не аукцион! Используйте кнопку 'Купить'", show_alert=True)
         return
 
     # Check if auction needs to start
@@ -76,27 +166,38 @@ async def handle_participate(callback: CallbackQuery, state: FSMContext):
     bid_count = len(set([bid['user_id'] for bid in bids]))  # Unique participants
 
     current_price = lot.get('current_price') or lot['start_price']
+    MIN_BID_STEP = 1000
+
+    # Calculate minimum bid
+    if lot.get('current_price') and lot['current_price'] > lot['start_price']:
+        min_bid = lot['current_price'] + MIN_BID_STEP
+    else:
+        min_bid = lot['start_price']
 
     # Build message text
     text = "🎯 <b>Участие в аукционе</b>\n\n"
     text += format_lot_message(lot, include_price=False)
-    text += f"\n<b>Стартовая цена:</b> {lot['start_price']} сум\n"
+    text += f"\n💰 <b>Стартовая цена:</b> {int(lot['start_price']):,} сум\n"
 
     if lot.get('current_price') and lot['current_price'] > lot['start_price']:
-        text += f"<b>Текущая ставка:</b> {lot['current_price']} сум\n"
+        text += f"🔥 <b>Текущая ставка:</b> {int(lot['current_price']):,} сум\n"
 
-    text += f"<b>Количество участников:</b> {bid_count}\n"
-    text += f"<b>Минимальная ставка:</b> {current_price + 1} сум\n"
+    text += f"👥 <b>Количество участников:</b> {bid_count}\n"
+    text += f"📊 <b>Минимальная ставка:</b> {int(min_bid):,} сум\n"
     text += f"\n💬 Введите вашу ставку:"
 
-    # Send photo with lot info
+    # Send photo(s) with lot info
     from bot import bot
-    from utils import get_photos_list
+    from utils import get_photos_list, create_media_group
 
     photos = get_photos_list(lot['photos'])
 
     try:
-        if photos:
+        if len(photos) == 0:
+            # No photos
+            await callback.message.answer(text, parse_mode="HTML", reply_markup=get_cancel_keyboard())
+        elif len(photos) == 1:
+            # Single photo
             await bot.send_photo(
                 chat_id=callback.from_user.id,
                 photo=photos[0],
@@ -105,9 +206,21 @@ async def handle_participate(callback: CallbackQuery, state: FSMContext):
                 reply_markup=get_cancel_keyboard()
             )
         else:
-            await callback.message.answer(text, parse_mode="HTML", reply_markup=get_cancel_keyboard())
+            # Multiple photos - send as media group with caption on first photo
+            media = create_media_group(photos, text)
+            await bot.send_media_group(
+                chat_id=callback.from_user.id,
+                media=media
+            )
+            # Send only keyboard without extra message
+            await bot.send_message(
+                chat_id=callback.from_user.id,
+                text="💬",
+                reply_markup=get_cancel_keyboard()
+            )
     except Exception as e:
         # If can't send photo, send text only
+        logger.error(f"Failed to send photos: {e}")
         await callback.message.answer(text, parse_mode="HTML", reply_markup=get_cancel_keyboard())
 
     await state.set_state(Bidding.waiting_for_bid)
@@ -117,34 +230,42 @@ async def handle_participate(callback: CallbackQuery, state: FSMContext):
 
     # Verify state was set
     current_state = await state.get_state()
+    saved_data = await state.get_data()
     logger.info(f"Current state after setting: {current_state}")
+    logger.info(f"Saved data: {saved_data}")
+    logger.info(f"🔍 State storage type: {type(state.storage)}")
 
     await callback.answer()
 
 
-@router.message(Bidding.waiting_for_bid)
+@router.message(Bidding.waiting_for_bid, F.text)
 async def process_bid(message: Message, state: FSMContext):
     """Process bid amount"""
     current_state = await state.get_state()
-    logger.info(f"process_bid handler triggered! User: {message.from_user.id}, State: {current_state}, Text: {message.text}")
+    logger.info(f"🎯 process_bid HANDLER CALLED! User: {message.from_user.id}, State: {current_state}, Text: '{message.text}'")
 
     # Check if message has text
     if not message.text:
         logger.warning(f"User {message.from_user.id} sent message without text")
-        await message.answer("Пожалуйста, введите числовую ставку!")
+        await message.answer("❌ Пожалуйста, введите числовую ставку!")
         return
 
-    if message.text == "Отмена":
+    # Handle cancel
+    if message.text == "❌ Отмена":
+        logger.info(f"User {message.from_user.id} cancelled bidding")
         await state.clear()
-        await message.answer("Отменено.", reply_markup=get_main_menu())
+        await message.answer("❌ Отменено.", reply_markup=get_main_menu())
         return
+
+    logger.info(f"Processing bid input: '{message.text}'")
 
     # Try to parse the bid amount
     try:
         # Remove spaces and replace comma with dot
         amount_str = message.text.strip().replace(',', '.').replace(' ', '')
+        logger.info(f"After cleanup: '{amount_str}'")
         amount = float(amount_str)
-        logger.info(f"Parsed bid amount: {amount} from input: {message.text}")
+        logger.info(f"✅ Parsed bid amount: {amount} from input: {message.text}")
     except ValueError:
         logger.warning(f"Invalid bid format from user {message.from_user.id}: {message.text}")
         await message.answer(
@@ -224,9 +345,9 @@ async def confirm_bid(callback: CallbackQuery, state: FSMContext):
     await db.add_bid(lot_id, callback.from_user.id, amount)
 
     await callback.message.edit_text(
-        f"✅ Ваша ставка принята!\n\n"
-        f"Сумма: {amount} сум\n"
-        f"Вы — текущий лидер аукциона!",
+        f"✅ <b>Ваша ставка принята!</b>\n\n"
+        f"💰 Сумма: {int(amount):,} сум\n"
+        f"🥇 Вы — текущий лидер аукциона!",
         parse_mode="HTML"
     )
 
@@ -236,9 +357,10 @@ async def confirm_bid(callback: CallbackQuery, state: FSMContext):
         try:
             await bot.send_message(
                 chat_id=previous_leader_id,
-                text=f"⚠️ Вашу ставку перебили!\n\n"
-                     f"Лот: {lot['description']}\n"
-                     f"Новая ставка: {amount} сум"
+                text=f"⚠️ <b>Вашу ставку перебили!</b>\n\n"
+                     f"📦 Лот: {lot['description']}\n"
+                     f"💰 Новая ставка: {int(amount):,} сум",
+                parse_mode="HTML"
             )
         except Exception:
             pass

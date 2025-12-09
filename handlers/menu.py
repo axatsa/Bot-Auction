@@ -1,12 +1,14 @@
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
+import logging
 
 from database import db
-from keyboards import get_main_menu, get_lot_type_keyboard, get_cancel_keyboard
+from keyboards import get_main_menu, get_cancel_keyboard
 from states import LotCreation
 
 router = Router()
+logger = logging.getLogger(__name__)
 
 
 async def check_registration(message: Message) -> bool:
@@ -19,85 +21,118 @@ async def check_registration(message: Message) -> bool:
     return is_registered
 
 
-@router.message(F.text == "Узнать мой ID")
-async def show_my_id(message: Message):
-    """Show user's Telegram ID"""
+@router.message(F.text == "🔥 Добавить товарный аукцион")
+async def create_auction(message: Message, state: FSMContext):
+    """Start auction creation"""
     if not await check_registration(message):
         return
 
     await message.answer(
-        f"Ваш Telegram ID: <code>{message.from_user.id}</code>",
-        parse_mode="HTML"
-    )
-
-
-@router.message(F.text == "Добавить товар на аукцион")
-async def add_auction_item(message: Message, state: FSMContext):
-    """Start creating auction lot"""
-    if not await check_registration(message):
-        return
-
-    await message.answer(
-        "Начинаем создание лота для аукциона.\n\n"
-        "Пожалуйста, отправьте фото товара.\n"
-        "Вы можете отправить одно или несколько фото.",
+        "📸 <b>Шаг 1/6 - Фото букета</b>\n\n"
+        "Загрузите фото букета (от 1 до 10 фотографий)\n\n"
+        "💡 <b>Совет:</b> Чёткие фото при хорошем освещении привлекут больше покупателей",
+        parse_mode="HTML",
         reply_markup=get_cancel_keyboard()
     )
     await state.set_state(LotCreation.waiting_for_photos)
     await state.update_data(lot_type='auction')
 
 
-@router.message(F.text == "Выставить букет")
-async def sell_bouquet(message: Message):
-    """Show lot type selection"""
+@router.message(F.text == "💐 Выставить букет")
+async def create_regular_sale(message: Message, state: FSMContext):
+    """Start regular sale creation"""
     if not await check_registration(message):
         return
 
     await message.answer(
-        "Выберите тип продажи:",
-        reply_markup=get_lot_type_keyboard()
+        "📸 <b>Шаг 1/6 - Фото букета</b>\n\n"
+        "Загрузите фото букета (от 1 до 10 фотографий)\n\n"
+        "💡 <b>Совет:</b> Чёткие фото при хорошем освещении привлекут больше покупателей",
+        parse_mode="HTML",
+        reply_markup=get_cancel_keyboard()
     )
+    await state.set_state(LotCreation.waiting_for_photos)
+    await state.update_data(lot_type='regular')
 
 
-@router.callback_query(F.data.startswith("lot_type:"))
-async def process_lot_type(callback: CallbackQuery, state: FSMContext):
-    """Process lot type selection"""
-    lot_type = callback.data.split(":")[1]
+@router.message(F.text == "📋 Текущие аукционы")
+async def show_current_auctions(message: Message):
+    """Show all current auctions in bot"""
+    if not await check_registration(message):
+        return
 
-    await callback.message.delete()
+    from database import db
+    from utils import format_lot_message, get_photos_list, format_auction_status
+    from keyboards import get_participate_keyboard, get_buy_keyboard
+    from bot import bot
 
-    if lot_type == "auction":
-        await callback.message.answer(
-            "Начинаем создание лота для аукциона.\n\n"
-            "Пожалуйста, отправьте фото товара.\n"
-            "Вы можете отправить одно или несколько фото.",
-            reply_markup=get_cancel_keyboard()
-        )
-        await state.set_state(LotCreation.waiting_for_photos)
-        await state.update_data(lot_type='auction')
-    else:
-        await callback.message.answer(
-            "Функция обычной продажи пока в разработке.",
-            reply_markup=get_main_menu()
-        )
+    # Get all active and approved lots
+    lots = await db.get_all_active_lots()
 
-    await callback.answer()
-
-
-@router.message(F.text == "Отмена")
-async def cancel_action(message: Message, state: FSMContext):
-    """Cancel current action"""
-    current_state = await state.get_state()
-
-    if current_state is None:
+    if not lots:
         await message.answer(
-            "Нечего отменять.",
-            reply_markup=get_main_menu()
+            "📭 <b>Нет активных аукционов</b>\n\n"
+            "На данный момент нет активных аукционов или товаров.\n"
+            "Следите за обновлениями в канале!",
+            parse_mode="HTML"
         )
         return
 
-    await state.clear()
     await message.answer(
-        "Действие отменено.",
-        reply_markup=get_main_menu()
+        f"📋 <b>Текущие аукционы и товары: {len(lots)}</b>\n\n"
+        f"Отправляю их вам...",
+        parse_mode="HTML"
     )
+
+    for lot in lots:
+        photos = get_photos_list(lot['photos'])
+
+        # Build caption
+        if lot['lot_type'] == 'auction':
+            caption = "🔥 <b>Аукцион</b>\n\n"
+        else:
+            caption = "💐 <b>Букет на продажу</b>\n\n"
+
+        caption += format_lot_message(lot)
+
+        if lot['lot_type'] == 'auction' and lot.get('auction_started'):
+            caption += format_auction_status(lot)
+
+        # Choose keyboard based on lot type
+        if lot['lot_type'] == 'auction':
+            keyboard = get_participate_keyboard(lot['id'])
+        else:
+            keyboard = get_buy_keyboard(lot['id'])
+
+        # Send lot
+        try:
+            if len(photos) == 1:
+                await bot.send_photo(
+                    chat_id=message.from_user.id,
+                    photo=photos[0],
+                    caption=caption,
+                    parse_mode="HTML",
+                    reply_markup=keyboard
+                )
+            else:
+                from utils import create_media_group
+                media = create_media_group(photos, caption)
+                await bot.send_media_group(
+                    chat_id=message.from_user.id,
+                    media=media
+                )
+                await bot.send_message(
+                    chat_id=message.from_user.id,
+                    text="👇 Нажмите чтобы участвовать" if lot['lot_type'] == 'auction' else "👇 Нажмите чтобы купить",
+                    reply_markup=keyboard
+                )
+        except Exception as e:
+            logger.error(f"Failed to send lot {lot['id']}: {e}")
+
+
+# Debug handler - catches unhandled text messages
+@router.message(F.text)
+async def debug_unhandled_text(message: Message, state: FSMContext):
+    """Debug: catch any unhandled text message"""
+    current_state = await state.get_state()
+    logger.warning(f"⚠️ MENU.PY caught unhandled text: '{message.text}' from user {message.from_user.id}, state: {current_state}")

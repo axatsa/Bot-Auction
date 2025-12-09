@@ -94,13 +94,15 @@ async def complete_auction(lot_id: int):
         try:
             await bot.send_message(
                 chat_id=winner_id,
-                text=f"🎉 <b>Вы выиграли аукцион!</b>\n\n"
-                     f"Лот: {lot['description']}\n"
-                     f"Ваша ставка: {winning_bid} сум\n\n"
-                     f"Контакт продавца:\n"
+                text=f"🎉 <b>Поздравляем! Вы выиграли аукцион!</b>\n\n"
+                     f"📦 <b>Лот:</b> {lot['description']}\n"
+                     f"💰 <b>Ваша ставка:</b> {int(winning_bid):,} сум\n"
+                     f"🏙️ <b>Город:</b> {lot['city']}\n\n"
+                     f"👤 <b>Контакт продавца:</b>\n"
                      f"Имя: {owner['name']}\n"
                      f"Username: {owner_username}\n"
-                     f"Телефон: {owner['phone']}",
+                     f"Телефон: {owner['phone']}\n\n"
+                     f"💬 Свяжитесь с продавцом для получения товара и оплаты",
                 parse_mode="HTML"
             )
         except Exception as e:
@@ -109,18 +111,22 @@ async def complete_auction(lot_id: int):
         # Format winner username safely
         winner_username = f"@{winner['username']}" if winner.get('username') else "нет username"
 
+        # Calculate profit percentage
+        profit_percent = int(((winning_bid - lot['start_price']) / lot['start_price']) * 100) if lot['start_price'] > 0 else 0
+
         # Notify owner
         try:
             await bot.send_message(
                 chat_id=lot['owner_id'],
-                text=f"✅ <b>Ваш аукцион завершён!</b>\n\n"
-                     f"Лот: {lot['description']}\n"
-                     f"Финальная цена: {winning_bid} сум\n\n"
-                     f"Победитель:\n"
+                text=f"🎉 <b>Ваш лот продан!</b>\n\n"
+                     f"📦 <b>Лот:</b> {lot['description']}\n"
+                     f"💰 <b>Финальная цена:</b> {int(winning_bid):,} сум\n"
+                     f"🚀 <b>Рост от стартовой:</b> +{profit_percent}%\n\n"
+                     f"👤 <b>Контакт покупателя:</b>\n"
                      f"Имя: {winner['name']}\n"
                      f"Username: {winner_username}\n"
                      f"Телефон: {winner['phone']}\n\n"
-                     f"Свяжитесь с покупателем.",
+                     f"💬 Свяжитесь с покупателем для передачи товара и получения оплаты",
                 parse_mode="HTML"
             )
         except Exception as e:
@@ -147,10 +153,12 @@ async def complete_auction(lot_id: int):
                 try:
                     await bot.send_message(
                         chat_id=participant_id,
-                        text=f"Аукцион завершён.\n\n"
-                             f"Лот: {lot['description']}\n"
-                             f"Ваша ставка была перебита.\n"
-                             f"Финальная цена: {winning_bid} сум"
+                        text=f"😔 <b>Аукцион завершён</b>\n\n"
+                             f"📦 Лот: {lot['description']}\n"
+                             f"💔 Ваша ставка была перебита\n"
+                             f"💰 Финальная цена: {int(winning_bid):,} сум\n\n"
+                             f"Не расстраивайтесь, следите за новыми лотами в канале!",
+                        parse_mode="HTML"
                     )
                 except Exception:
                     pass
@@ -163,9 +171,14 @@ async def complete_auction(lot_id: int):
         try:
             await bot.send_message(
                 chat_id=lot['owner_id'],
-                text=f"Аукцион завершён.\n\n"
-                     f"Лот: {lot['description']}\n"
-                     f"К сожалению, ставок не было."
+                text=f"😔 <b>Аукцион завершён</b>\n\n"
+                     f"📦 Лот: {lot['description']}\n"
+                     f"К сожалению, ставок не было.\n\n"
+                     f"💡 <b>Советы:</b>\n"
+                     f"• Снизьте стартовую цену\n"
+                     f"• Добавьте больше качественных фото\n"
+                     f"• Улучшите описание товара",
+                parse_mode="HTML"
             )
         except Exception:
             pass

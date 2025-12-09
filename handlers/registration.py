@@ -4,8 +4,9 @@ from aiogram.types import Message
 from aiogram.fsm.context import FSMContext
 
 from database import db
-from keyboards import get_phone_keyboard, get_main_menu
+from keyboards import get_phone_keyboard, get_main_menu, get_admin_menu
 from states import Registration
+from utils import is_admin
 
 router = Router()
 
@@ -17,9 +18,13 @@ async def cmd_start(message: Message, state: FSMContext):
     is_registered = await db.is_user_registered(message.from_user.id)
 
     if is_registered:
+        # Check if user is admin
+        user_is_admin = await is_admin(message.from_user.id)
+        menu = get_admin_menu() if user_is_admin else get_main_menu()
+
         await message.answer(
             "Добро пожаловать! Выберите действие:",
-            reply_markup=get_main_menu()
+            reply_markup=menu
         )
     else:
         await message.answer(
@@ -53,19 +58,28 @@ async def process_phone(message: Message, state: FSMContext):
     )
 
     if success:
+        # Check if user is admin
+        user_is_admin = await is_admin(message.from_user.id)
+        menu = get_admin_menu() if user_is_admin else get_main_menu()
+
         await message.answer(
-            f"Регистрация завершена!\n\n"
+            f"✅ <b>Регистрация завершена!</b>\n\n"
             f"Ваш ID: {message.from_user.id}\n"
             f"Имя: {message.from_user.full_name}\n"
             f"Телефон: {contact.phone_number}\n\n"
             f"Теперь вы можете пользоваться ботом.",
-            reply_markup=get_main_menu()
+            parse_mode="HTML",
+            reply_markup=menu
         )
         await state.clear()
     else:
+        # Check if user is admin
+        user_is_admin = await is_admin(message.from_user.id)
+        menu = get_admin_menu() if user_is_admin else get_main_menu()
+
         await message.answer(
             "Произошла ошибка при регистрации. Попробуйте еще раз.",
-            reply_markup=get_main_menu()
+            reply_markup=menu
         )
         await state.clear()
 

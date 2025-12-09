@@ -39,6 +39,7 @@ class Database:
                 CREATE TABLE IF NOT EXISTS lots (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     owner_id INTEGER NOT NULL,
+                    lot_type TEXT DEFAULT 'auction',
                     photos TEXT NOT NULL,
                     description TEXT NOT NULL,
                     city TEXT NOT NULL,
@@ -102,14 +103,15 @@ class Database:
 
     # Lot methods
     async def create_lot(self, owner_id: int, photos: str, description: str,
-                        city: str, size: str, wear: str, start_price: float) -> int:
+                        city: str, size: str, wear: str, start_price: float,
+                        lot_type: str = 'auction') -> int:
         """Create new lot"""
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
-                '''INSERT INTO lots (owner_id, photos, description, city, size, wear,
+                '''INSERT INTO lots (owner_id, lot_type, photos, description, city, size, wear,
                    start_price, current_price, created_at, status)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-                (owner_id, photos, description, city, size, wear, start_price,
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                (owner_id, lot_type, photos, description, city, size, wear, start_price,
                  start_price, datetime.now().isoformat(), 'pending')
             )
             await db.commit()
@@ -163,6 +165,16 @@ class Database:
             async with db.execute(
                 'SELECT * FROM lots WHERE status = ? AND auction_started = 1',
                 ('active',)
+            ) as cursor:
+                rows = await cursor.fetchall()
+                return [dict(row) for row in rows]
+
+    async def get_all_active_lots(self) -> List[Dict[str, Any]]:
+        """Get all active and approved lots (for viewing in bot)"""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT * FROM lots WHERE status IN ('approved', 'active') ORDER BY created_at DESC"
             ) as cursor:
                 rows = await cursor.fetchall()
                 return [dict(row) for row in rows]
@@ -249,6 +261,58 @@ class Database:
             async with db.execute('SELECT telegram_id FROM admins') as cursor:
                 rows = await cursor.fetchall()
                 return [row[0] for row in rows]
+
+    # History methods
+    async def get_lots_history(self, status: str = None, limit: int = 50) -> List[Dict[str, Any]]:
+        """Get lots history with optional status filter"""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            if status:
+                query = 'SELECT * FROM lots WHERE status = ? ORDER BY created_at DESC LIMIT ?'
+                params = (status, limit)
+            else:
+                query = 'SELECT * FROM lots ORDER BY created_at DESC LIMIT ?'
+                params = (limit,)
+
+            async with db.execute(query, params) as cursor:
+                rows = await cursor.fetchall()
+                return [dict(row) for row in rows]
+
+    async def get_stats(self) -> Dict[str, Any]:
+        """Get general statistics"""
+        async with aiosqlite.connect(self.db_path) as db:
+            stats = {}
+
+            # Total users
+            async with db.execute('SELECT COUNT(*) FROM users') as cursor:
+                stats['total_users'] = (await cursor.fetchone())[0]
+
+            # Total lots
+            async with db.execute('SELECT COUNT(*) FROM lots') as cursor:
+                stats['total_lots'] = (await cursor.fetchone())[0]
+
+            # Lots by status
+            async with db.execute('SELECT status, COUNT(*) FROM lots GROUP BY status') as cursor:
+                rows = await cursor.fetchall()
+                stats['lots_by_status'] = {row[0]: row[1] for row in rows}
+
+            # Finished with bids
+            async with db.execute('SELECT COUNT(*) FROM lots WHERE status = ?', ('finished',)) as cursor:
+                stats['finished_auctions'] = (await cursor.fetchone())[0]
+
+            # Total bids
+            async with db.execute('SELECT COUNT(*) FROM bids') as cursor:
+                stats['total_bids'] = (await cursor.fetchone())[0]
+
+            # Average final price
+            async with db.execute(
+                'SELECT AVG(current_price) FROM lots WHERE status = ? AND current_price IS NOT NULL',
+                ('finished',)
+            ) as cursor:
+                avg_price = (await cursor.fetchone())[0]
+                stats['avg_final_price'] = avg_price if avg_price else 0
+
+            return stats
 
 
 # Global database instance

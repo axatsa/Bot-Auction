@@ -22,7 +22,7 @@ async def process_photos(message: Message, state: FSMContext):
     if len(photos) >= MAX_PHOTOS:
         await message.answer(
             f"❌ Достигнуто максимальное количество фото ({MAX_PHOTOS}).\n\n"
-            f"Пожалуйста, введите описание товара.",
+            f"Переходим к следующему шагу.",
             reply_markup=get_cancel_keyboard()
         )
         await state.set_state(LotCreation.waiting_for_description)
@@ -35,7 +35,7 @@ async def process_photos(message: Message, state: FSMContext):
 
     await message.answer(
         f"✅ Фото добавлено ({len(photos)}/{MAX_PHOTOS})\n\n"
-        f"Отправьте еще фото или введите описание товара.",
+        f"Отправьте ещё фото или введите описание товара для перехода к следующему шагу.",
         reply_markup=get_cancel_keyboard()
     )
     await state.set_state(LotCreation.waiting_for_description)
@@ -56,13 +56,37 @@ async def invalid_photos(message: Message):
 @router.message(LotCreation.waiting_for_description, F.text)
 async def process_description(message: Message, state: FSMContext):
     """Process lot description"""
-    if message.text == "Отмена":
+    if message.text == "❌ Отмена":
         await state.clear()
-        await message.answer("Действие отменено.", reply_markup=get_main_menu())
+        await message.answer("❌ Действие отменено.", reply_markup=get_main_menu())
+        return
+
+    # Check if user has added photos
+    data = await state.get_data()
+    photos = data.get('photos', [])
+
+    if not photos:
+        await message.answer(
+            "❌ Сначала загрузите хотя бы одно фото товара!",
+            reply_markup=get_cancel_keyboard()
+        )
+        await state.set_state(LotCreation.waiting_for_photos)
         return
 
     # Validate description length
+    MIN_DESCRIPTION_LENGTH = 10
     MAX_DESCRIPTION_LENGTH = 500
+
+    if len(message.text) < MIN_DESCRIPTION_LENGTH:
+        await message.answer(
+            f"❌ Описание слишком короткое!\n\n"
+            f"Минимум: {MIN_DESCRIPTION_LENGTH} символов\n"
+            f"Ваше описание: {len(message.text)} символов\n\n"
+            f"Добавьте больше деталей о товаре.",
+            reply_markup=get_cancel_keyboard()
+        )
+        return
+
     if len(message.text) > MAX_DESCRIPTION_LENGTH:
         await message.answer(
             f"❌ Описание слишком длинное!\n\n"
@@ -75,9 +99,14 @@ async def process_description(message: Message, state: FSMContext):
 
     await state.update_data(description=message.text)
 
+    from keyboards import get_city_keyboard
+
     await message.answer(
-        "Укажите город:",
-        reply_markup=get_cancel_keyboard()
+        "🏙️ <b>Шаг 2/5 - Город</b>\n\n"
+        "В каком городе находится товар?\n\n"
+        "💡 <b>Совет:</b> Покупатель узнает где можно забрать товар",
+        parse_mode="HTML",
+        reply_markup=get_city_keyboard()
     )
     await state.set_state(LotCreation.waiting_for_city)
 
@@ -85,15 +114,35 @@ async def process_description(message: Message, state: FSMContext):
 @router.message(LotCreation.waiting_for_city, F.text)
 async def process_city(message: Message, state: FSMContext):
     """Process lot city"""
-    if message.text == "Отмена":
+    if message.text == "❌ Отмена":
         await state.clear()
-        await message.answer("Действие отменено.", reply_markup=get_main_menu())
+        await message.answer("❌ Действие отменено.", reply_markup=get_main_menu())
+        return
+
+    # Handle custom city input
+    if message.text == "✏️ Другой город":
+        await message.answer(
+            "✏️ Введите название вашего города:",
+            reply_markup=get_cancel_keyboard()
+        )
+        return
+
+    # Validate city name
+    if len(message.text) < 2:
+        await message.answer(
+            "❌ Укажите корректное название города",
+            reply_markup=get_city_keyboard()
+        )
         return
 
     await state.update_data(city=message.text)
 
+    from keyboards import get_size_keyboard
+
     await message.answer(
+        "📏 <b>Шаг 3/6 - Размер букета</b>\n\n"
         "Выберите размер букета:",
+        parse_mode="HTML",
         reply_markup=get_size_keyboard()
     )
     await state.set_state(LotCreation.waiting_for_size)
@@ -102,24 +151,28 @@ async def process_city(message: Message, state: FSMContext):
 @router.message(LotCreation.waiting_for_size, F.text)
 async def process_size(message: Message, state: FSMContext):
     """Process lot size"""
-    if message.text == "Отмена":
+    if message.text == "❌ Отмена":
         await state.clear()
-        await message.answer("Действие отменено.", reply_markup=get_main_menu())
+        await message.answer("❌ Действие отменено.", reply_markup=get_main_menu())
         return
 
     # Validate size selection
     valid_sizes = ["Маленький", "Средний", "Большой"]
     if message.text not in valid_sizes:
         await message.answer(
-            "Пожалуйста, выберите размер из предложенных вариантов.",
+            "❌ Пожалуйста, выберите размер из предложенных вариантов.",
             reply_markup=get_size_keyboard()
         )
         return
 
     await state.update_data(size=message.text)
 
+    from keyboards import get_wear_keyboard
+
     await message.answer(
-        "Выберите износ букета:",
+        "🌸 <b>Шаг 4/6 - Износ букета</b>\n\n"
+        "Выберите состояние букета:",
+        parse_mode="HTML",
         reply_markup=get_wear_keyboard()
     )
     await state.set_state(LotCreation.waiting_for_wear)
@@ -128,24 +181,42 @@ async def process_size(message: Message, state: FSMContext):
 @router.message(LotCreation.waiting_for_wear, F.text)
 async def process_wear(message: Message, state: FSMContext):
     """Process lot wear"""
-    if message.text == "Отмена":
+    if message.text == "❌ Отмена":
         await state.clear()
-        await message.answer("Действие отменено.", reply_markup=get_main_menu())
+        await message.answer("❌ Действие отменено.", reply_markup=get_main_menu())
         return
 
     # Validate wear selection
     valid_wear_options = ["Сегодняшний", "1 дневный", "2 дневный", "Более 3 дней"]
     if message.text not in valid_wear_options:
         await message.answer(
-            "Пожалуйста, выберите износ из предложенных вариантов.",
+            "❌ Пожалуйста, выберите износ из предложенных вариантов.",
             reply_markup=get_wear_keyboard()
         )
         return
 
     await state.update_data(wear=message.text)
 
+    # Check lot type to show appropriate message
+    data = await state.get_data()
+    lot_type = data.get('lot_type', 'auction')
+
+    if lot_type == 'auction':
+        price_text = (
+            "💰 <b>Шаг 5/6 - Стартовая цена</b>\n\n"
+            "Укажите стартовую цену для аукциона (в сумах)\n\n"
+            "💡 <b>Совет:</b> Оптимальная стартовая цена - 60-70% от желаемой"
+        )
+    else:
+        price_text = (
+            "💰 <b>Шаг 5/6 - Цена</b>\n\n"
+            "Укажите цену букета (в сумах)\n\n"
+            "💡 <b>Совет:</b> Указывайте справедливую цену за букет"
+        )
+
     await message.answer(
-        "Укажите цену (введите число):",
+        price_text,
+        parse_mode="HTML",
         reply_markup=get_cancel_keyboard()
     )
     await state.set_state(LotCreation.waiting_for_price)
@@ -153,21 +224,33 @@ async def process_wear(message: Message, state: FSMContext):
 
 @router.message(LotCreation.waiting_for_price, F.text)
 async def process_price(message: Message, state: FSMContext):
-    """Process lot price and show draft"""
-    if message.text == "Отмена":
+    """Process lot price and create draft"""
+    if message.text == "❌ Отмена":
         await state.clear()
-        await message.answer("Действие отменено.", reply_markup=get_main_menu())
+        await message.answer("❌ Действие отменено.", reply_markup=get_main_menu())
         return
 
     try:
-        price = float(message.text)
+        # Parse price
+        price_str = message.text.strip().replace(',', '').replace(' ', '')
+        price = float(price_str)
+
+        # Validate price
         if price <= 0:
-            raise ValueError
+            raise ValueError("negative")
+
+        if price < 1000:
+            await message.answer(
+                "❌ Минимальная стартовая цена: 1,000 сум",
+                reply_markup=get_cancel_keyboard()
+            )
+            return
 
         await state.update_data(price=price)
 
         # Create lot in database
         data = await state.get_data()
+        lot_type = data.get('lot_type', 'auction')  # Default to auction
         lot_id = await db.create_lot(
             owner_id=message.from_user.id,
             photos=photos_to_string(data['photos']),
@@ -175,18 +258,19 @@ async def process_price(message: Message, state: FSMContext):
             city=data['city'],
             size=data['size'],
             wear=data['wear'],
-            start_price=price
+            start_price=price,
+            lot_type=lot_type
         )
 
         await state.update_data(lot_id=lot_id)
 
-        # Show draft
+        # Show draft with preview
         await show_lot_draft(message, lot_id, state)
         await state.set_state(LotCreation.editing_draft)
 
     except ValueError:
         await message.answer(
-            "Введите корректное число (положительное число).",
+            "❌ Введите корректное число (например: 50000 или 50 000)",
             reply_markup=get_cancel_keyboard()
         )
 
@@ -197,13 +281,18 @@ async def show_lot_draft(message: Message, lot_id: int, state: FSMContext):
 
     if not lot:
         await message.answer(
-            "Ошибка: лот не найден.",
+            "❌ Ошибка: лот не найден.",
             reply_markup=get_main_menu()
         )
         await state.clear()
         return
 
-    caption = "📝 <b>Черновик лота:</b>\n\n" + format_lot_message(lot)
+    # Build preview caption
+    lot_type_label = "🔥 Аукцион" if lot.get('lot_type') == 'auction' else "💐 Букет на продажу"
+    caption = f"✅ <b>Шаг 6/6 - Предпросмотр</b>\n\n"
+    caption += f"<b>Тип:</b> {lot_type_label}\n\n"
+    caption += format_lot_message(lot)
+    caption += "\n\n<i>Так увидят ваш лот покупатели в канале</i>"
 
     photos = get_photos_list(lot['photos'])
 
@@ -218,7 +307,9 @@ async def show_lot_draft(message: Message, lot_id: int, state: FSMContext):
         media = create_media_group(photos, caption)
         await message.answer_media_group(media)
         await message.answer(
-            "Выберите действие:",
+            "📋 <b>Выберите действие:</b>\n\n"
+            "Вы можете отредактировать любое поле или опубликовать лот",
+            parse_mode="HTML",
             reply_markup=get_draft_edit_keyboard(lot_id)
         )
 
@@ -237,7 +328,11 @@ async def handle_draft_edit(callback: CallbackQuery, state: FSMContext):
         await db.update_lot_status(lot_id, 'pending')
 
         await callback.message.answer(
-            "Лот отправлен на модерацию администратору.",
+            "🎉 <b>Готово!</b>\n\n"
+            "Ваш лот отправлен на модерацию администратору\n\n"
+            "⏳ Обычно проверка занимает 5-15 минут\n\n"
+            "Мы уведомим вас когда лот будет одобрен и опубликован",
+            parse_mode="HTML",
             reply_markup=get_main_menu()
         )
 

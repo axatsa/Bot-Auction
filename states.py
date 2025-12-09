@@ -34,3 +34,8 @@ class Bidding(StatesGroup):
 class AdminAuth(StatesGroup):
     """States for admin authentication"""
     waiting_for_password = State()
+
+
+class AdminModeration(StatesGroup):
+    """States for admin moderation"""
+    waiting_for_rejection_reason = State()

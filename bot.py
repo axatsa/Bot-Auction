@@ -18,9 +18,21 @@ bot = Bot(token=config.BOT_TOKEN)
 storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 
+# Bot username and ID will be set on startup
+bot_username = None
+bot_id = None
+
 
 async def on_startup():
     """Actions on bot startup"""
+    global bot_username, bot_id
+
+    # Get bot username and ID
+    bot_info = await bot.get_me()
+    bot_username = bot_info.username
+    bot_id = bot_info.id
+    logging.info(f"Bot username: @{bot_username}, ID: {bot_id}")
+
     # Validate configuration
     logging.info("Validating configuration...")
 

@@ -96,7 +96,7 @@ async def complete_auction(lot_id: int):
                 chat_id=winner_id,
                 text=f"🎉 <b>Поздравляем! Вы выиграли аукцион!</b>\n\n"
                      f"📦 <b>Лот:</b> {lot['description']}\n"
-                     f"💰 <b>Ваша ставка:</b> {int(winning_bid):,} сум\n"
+                     f"💰 <b>Ваша ставка:</b> {int(winning_bid):,} тенге\n"
                      f"🏙️ <b>Город:</b> {lot['city']}\n\n"
                      f"👤 <b>Контакт продавца:</b>\n"
                      f"Имя: {owner['name']}\n"
@@ -120,7 +120,7 @@ async def complete_auction(lot_id: int):
                 chat_id=lot['owner_id'],
                 text=f"🎉 <b>Ваш лот продан!</b>\n\n"
                      f"📦 <b>Лот:</b> {lot['description']}\n"
-                     f"💰 <b>Финальная цена:</b> {int(winning_bid):,} сум\n"
+                     f"💰 <b>Финальная цена:</b> {int(winning_bid):,} тенге\n"
                      f"🚀 <b>Рост от стартовой:</b> +{profit_percent}%\n\n"
                      f"👤 <b>Контакт покупателя:</b>\n"
                      f"Имя: {winner['name']}\n"
@@ -140,7 +140,7 @@ async def complete_auction(lot_id: int):
                     chat_id=admin_id,
                     text=f"ℹ️ <b>Аукцион {lot_id} завершён</b>\n\n"
                          f"Победитель: {winner['name']} ({winner_username})\n"
-                         f"Цена: {winning_bid} сум",
+                         f"Цена: {winning_bid} тенге",
                     parse_mode="HTML"
                 )
             except Exception as e:
@@ -156,7 +156,7 @@ async def complete_auction(lot_id: int):
                         text=f"😔 <b>Аукцион завершён</b>\n\n"
                              f"📦 Лот: {lot['description']}\n"
                              f"💔 Ваша ставка была перебита\n"
-                             f"💰 Финальная цена: {int(winning_bid):,} сум\n\n"
+                             f"💰 Финальная цена: {int(winning_bid):,} тенге\n\n"
                              f"Не расстраивайтесь, следите за новыми лотами в канале!",
                         parse_mode="HTML"
                     )
@@ -194,15 +194,42 @@ async def complete_auction(lot_id: int):
             except Exception:
                 pass
 
-    # Delete channel message
+    # Update channel message to show "SOLD"
     if lot.get('channel_message_id'):
         try:
-            await bot.delete_message(
-                chat_id=config.CHANNEL_ID,
-                message_id=lot['channel_message_id']
-            )
+            from utils import format_sold_message, get_photos_list
+
+            # Determine final price
+            final_price = winning_bid if bids else lot['start_price']
+
+            # Format sold message
+            sold_text = format_sold_message(lot, final_price)
+
+            # Get photos to determine if it's a single photo or media group
+            photos = get_photos_list(lot['photos'])
+
+            # Edit message (remove keyboard to prevent further interaction)
+            if len(photos) == 1:
+                # Single photo - edit caption
+                await bot.edit_message_caption(
+                    chat_id=config.CHANNEL_ID,
+                    message_id=lot['channel_message_id'],
+                    caption=sold_text,
+                    parse_mode="HTML",
+                    reply_markup=None
+                )
+            else:
+                # Media group - can't edit, so we'll try to delete and ignore errors
+                # Note: Media groups can't have their captions edited easily
+                try:
+                    await bot.delete_message(
+                        chat_id=config.CHANNEL_ID,
+                        message_id=lot['channel_message_id']
+                    )
+                except Exception:
+                    pass
         except Exception as e:
-            print(f"Failed to delete channel message: {e}")
+            print(f"Failed to update channel message: {e}")
 
 
 def start_scheduler():

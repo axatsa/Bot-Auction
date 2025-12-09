@@ -4,12 +4,43 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 
 from database import db
-from keyboards import get_participate_keyboard, get_buy_keyboard, get_rejection_reasons_keyboard, get_confirm_rejection_keyboard, get_moderation_keyboard, get_admin_menu
+from keyboards import get_participate_keyboard, get_buy_keyboard, get_rejection_reasons_keyboard, get_confirm_rejection_keyboard, get_moderation_keyboard, get_admin_menu, get_main_menu
 from utils import is_admin, format_lot_message, get_photos_list, format_auction_status
 from states import AdminAuth, AdminModeration
 import config
 
 router = Router()
+
+
+@router.message(F.text == "👤 Режим пользователя")
+async def switch_to_user_mode(message: Message):
+    """Switch admin to user mode"""
+    if not await is_admin(message.from_user.id):
+        await message.answer("❌ У вас нет прав администратора!")
+        return
+
+    await message.answer(
+        "👤 <b>Режим пользователя активирован</b>\n\n"
+        "Теперь вы можете создавать лоты и участвовать в аукционах.\n\n"
+        "Для возврата в админку используйте кнопку '⚙️ Режим администратора'",
+        parse_mode="HTML",
+        reply_markup=get_main_menu(is_admin=True)
+    )
+
+
+@router.message(F.text == "⚙️ Режим администратора")
+async def switch_to_admin_mode(message: Message):
+    """Switch user to admin mode"""
+    if not await is_admin(message.from_user.id):
+        await message.answer("❌ У вас нет прав администратора!")
+        return
+
+    await message.answer(
+        "⚙️ <b>Режим администратора активирован</b>\n\n"
+        "Вы вернулись в панель администратора.",
+        parse_mode="HTML",
+        reply_markup=get_admin_menu()
+    )
 
 
 @router.message(Command("admin"))
@@ -102,7 +133,7 @@ async def show_history(message: Message):
     text += f"Успешных аукционов: {stats['finished_auctions']}\n"
 
     if stats['avg_final_price'] > 0:
-        text += f"Средняя цена продажи: {int(stats['avg_final_price']):,} сум\n"
+        text += f"Средняя цена продажи: {int(stats['avg_final_price']):,} тенге\n"
 
     await message.answer(text, parse_mode="HTML")
 
@@ -173,10 +204,10 @@ async def show_history_lots(callback: CallbackQuery):
         text += f"👤 Продавец: {owner_name}\n"
         text += f"📝 {lot['description'][:50]}...\n" if len(lot['description']) > 50 else f"📝 {lot['description']}\n"
         text += f"🏙️ {lot['city']}\n"
-        text += f"💰 Старт: {int(lot['start_price']):,} сум\n"
+        text += f"💰 Старт: {int(lot['start_price']):,} тенге\n"
 
         if lot.get('current_price') and lot['current_price'] > lot['start_price']:
-            text += f"🔥 Финал: {int(lot['current_price']):,} сум\n"
+            text += f"🔥 Финал: {int(lot['current_price']):,} тенге\n"
 
         # Status
         status_emoji = {
@@ -317,11 +348,14 @@ async def handle_moderation(callback: CallbackQuery):
         photos = get_photos_list(lot['photos'])
 
         # Choose keyboard based on lot type
+        # Import bot_username for deep linking
+        from bot import bot_username
+
         if lot.get('lot_type') == 'auction':
-            keyboard = get_participate_keyboard(lot_id)
+            keyboard = get_participate_keyboard(lot_id, bot_username)
             button_text = "👇 Нажмите чтобы участвовать в аукционе"
         else:
-            keyboard = get_buy_keyboard(lot_id)
+            keyboard = get_buy_keyboard(lot_id, bot_username)
             button_text = "👇 Нажмите чтобы купить"
 
         try:
@@ -373,7 +407,7 @@ async def handle_moderation(callback: CallbackQuery):
                         f"🎉 <b>Отличная новость!</b>\n\n"
                         f"Ваш лот одобрен и опубликован в канале\n\n"
                         f"📦 <b>Лот:</b> {lot['description']}\n"
-                        f"💰 <b>Стартовая цена:</b> {int(lot['start_price']):,} сум\n"
+                        f"💰 <b>Стартовая цена:</b> {int(lot['start_price']):,} тенге\n"
                         f"⏰ <b>Длительность:</b> 2 часа\n\n"
                         f"Аукцион начнётся когда кто-то сделает первую ставку"
                     )
@@ -382,7 +416,7 @@ async def handle_moderation(callback: CallbackQuery):
                         f"🎉 <b>Отличная новость!</b>\n\n"
                         f"Ваш букет одобрен и опубликован в канале\n\n"
                         f"📦 <b>Товар:</b> {lot['description']}\n"
-                        f"💰 <b>Цена:</b> {int(lot['start_price']):,} сум\n\n"
+                        f"💰 <b>Цена:</b> {int(lot['start_price']):,} тенге\n\n"
                         f"Ожидайте покупателя!"
                     )
 

@@ -10,6 +10,13 @@ async def is_admin(user_id: int) -> bool:
     return await db.is_admin(user_id)
 
 
+async def get_user_menu(user_id: int):
+    """Get appropriate menu for user (admin or regular)"""
+    from keyboards import get_main_menu, get_admin_menu
+    user_is_admin = await is_admin(user_id)
+    return get_main_menu(is_admin=user_is_admin)
+
+
 def format_lot_message(lot: Dict[str, Any], include_price: bool = True) -> str:
     """Format lot information for display"""
     text = f"<b>Описание:</b> {lot['description']}\n"
@@ -19,10 +26,10 @@ def format_lot_message(lot: Dict[str, Any], include_price: bool = True) -> str:
 
     if include_price:
         if lot.get('current_price') and lot['current_price'] > lot['start_price']:
-            text += f"<b>Стартовая цена:</b> {lot['start_price']} сум\n"
-            text += f"<b>Текущая ставка:</b> {lot['current_price']} сум\n"
+            text += f"<b>Стартовая цена:</b> {lot['start_price']} тенге\n"
+            text += f"<b>Текущая ставка:</b> {lot['current_price']} тенге\n"
         else:
-            text += f"<b>Стартовая цена:</b> {lot['start_price']} сум\n"
+            text += f"<b>Стартовая цена:</b> {lot['start_price']} тенге\n"
 
     return text
 
@@ -51,6 +58,28 @@ def format_auction_status(lot: Dict[str, Any]) -> str:
             return f"\n<b>До завершения:</b> {minutes} мин"
 
     return ""
+
+
+def format_sold_message(lot: Dict[str, Any], final_price: float = None) -> str:
+    """Format message for sold items"""
+    text = "🔴 <b>ПРОДАНО</b>\n\n"
+    text += f"<b>Описание:</b> {lot['description']}\n"
+    text += f"<b>Город:</b> {lot['city']}\n"
+    text += f"<b>Размер:</b> {lot['size']}\n"
+    text += f"<b>Износ:</b> {lot['wear']}\n"
+
+    # Show final price
+    if final_price:
+        text += f"<b>Финальная цена:</b> {int(final_price):,} тенге\n"
+    else:
+        text += f"<b>Финальная цена:</b> {int(lot['start_price']):,} тенге\n"
+
+    # Show price increase for auctions
+    if lot.get('lot_type') == 'auction' and final_price and final_price > lot['start_price']:
+        increase_percent = int(((final_price - lot['start_price']) / lot['start_price']) * 100)
+        text += f"<b>Рост от стартовой:</b> +{increase_percent}%\n"
+
+    return text
 
 
 def get_photos_list(photos_str: str) -> List[str]:
@@ -99,16 +128,16 @@ def validate_bid(amount: float, start_price: float, current_price: float = None)
         if current_price:
             return False, f"""❌ Ставка слишком низкая!
 
-💰 Текущая ставка: {int(current_price):,} сум
-📊 Минимальная ставка: {int(required_bid):,} сум
-💵 Ваша ставка: {int(amount):,} сум
+💰 Текущая ставка: {int(current_price):,} тенге
+📊 Минимальная ставка: {int(required_bid):,} тенге
+💵 Ваша ставка: {int(amount):,} тенге
 
-💡 Ставка должна быть минимум на {MIN_BID_STEP:,} сум больше текущей"""
+💡 Ставка должна быть минимум на {MIN_BID_STEP:,} тенге больше текущей"""
         else:
             return False, f"""❌ Ставка слишком низкая!
 
-📊 Стартовая цена: {int(start_price):,} сум
-💵 Ваша ставка: {int(amount):,} сум
+📊 Стартовая цена: {int(start_price):,} тенге
+💵 Ваша ставка: {int(amount):,} тенге
 
 💡 Ставка должна быть не меньше стартовой цены"""
 

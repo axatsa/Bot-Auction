@@ -3,7 +3,8 @@
     "allow": [
       "Bash(.venv/Scripts/python.exe:*)",
       "Bash(dir:*)",
-      "Bash(.venvScriptspython.exe migrate_db.py)"
+      "Bash(.venvScriptspython.exe migrate_db.py)",
+      "Bash(taskkill:*)"
     ],
     "deny": [],
     "ask": []

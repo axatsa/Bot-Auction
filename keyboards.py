@@ -9,12 +9,14 @@ def get_phone_keyboard() -> ReplyKeyboardMarkup:
     return kb.as_markup(resize_keyboard=True, one_time_keyboard=True)
 
 
-def get_main_menu() -> ReplyKeyboardMarkup:
+def get_main_menu(is_admin: bool = False) -> ReplyKeyboardMarkup:
     """Main menu keyboard"""
     kb = ReplyKeyboardBuilder()
     kb.button(text="🔥 Добавить товарный аукцион")
     kb.button(text="💐 Выставить букет")
     kb.button(text="📋 Текущие аукционы")
+    if is_admin:
+        kb.button(text="⚙️ Режим администратора")
     kb.adjust(1)
     return kb.as_markup(resize_keyboard=True)
 
@@ -24,7 +26,8 @@ def get_admin_menu() -> ReplyKeyboardMarkup:
     kb = ReplyKeyboardBuilder()
     kb.button(text="🔔 Модерация")
     kb.button(text="📜 История")
-    kb.adjust(2)
+    kb.button(text="👤 Режим пользователя")
+    kb.adjust(2, 1)
     return kb.as_markup(resize_keyboard=True)
 
 
@@ -74,17 +77,29 @@ def get_confirm_rejection_keyboard(lot_id: int) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-def get_participate_keyboard(lot_id: int) -> InlineKeyboardMarkup:
+def get_participate_keyboard(lot_id: int, bot_username: str = None) -> InlineKeyboardMarkup:
     """Keyboard for participating in auction"""
     kb = InlineKeyboardBuilder()
-    kb.button(text="🎯 Участвовать", callback_data=f"participate:{lot_id}")
+
+    # If bot_username provided, use deep link, otherwise use callback
+    if bot_username:
+        kb.button(text="🎯 Участвовать", url=f"https://t.me/{bot_username}?start=lot_{lot_id}")
+    else:
+        kb.button(text="🎯 Участвовать", callback_data=f"participate:{lot_id}")
+
     return kb.as_markup()
 
 
-def get_buy_keyboard(lot_id: int) -> InlineKeyboardMarkup:
+def get_buy_keyboard(lot_id: int, bot_username: str = None) -> InlineKeyboardMarkup:
     """Keyboard for buying item at fixed price"""
     kb = InlineKeyboardBuilder()
-    kb.button(text="💳 Купить", callback_data=f"buy:{lot_id}")
+
+    # If bot_username provided, use deep link, otherwise use callback
+    if bot_username:
+        kb.button(text="💳 Купить", url=f"https://t.me/{bot_username}?start=buy_{lot_id}")
+    else:
+        kb.button(text="💳 Купить", callback_data=f"buy:{lot_id}")
+
     return kb.as_markup()
 
 

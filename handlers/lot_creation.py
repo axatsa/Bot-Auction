@@ -5,7 +5,7 @@ from aiogram.fsm.context import FSMContext
 from database import db
 from keyboards import get_draft_edit_keyboard, get_main_menu, get_cancel_keyboard, get_moderation_keyboard, get_size_keyboard, get_wear_keyboard, get_delete_confirmation_keyboard
 from states import LotCreation
-from utils import format_lot_message, get_photos_list, photos_to_string, create_media_group
+from utils import format_lot_message, get_photos_list, photos_to_string, create_media_group, get_user_menu
 import config
 
 router = Router()
@@ -41,12 +41,25 @@ async def process_photos(message: Message, state: FSMContext):
     await state.set_state(LotCreation.waiting_for_description)
 
 
-@router.message(LotCreation.waiting_for_photos)
-async def invalid_photos(message: Message):
-    """Handle invalid photo input"""
-    if message.text == "Отмена":
+@router.message(LotCreation.waiting_for_photos, F.text)
+async def cancel_photos(message: Message, state: FSMContext):
+    """Handle cancel during photo upload"""
+    if message.text == "❌ Отмена":
+        await state.clear()
+        menu = await get_user_menu(message.from_user.id)
+        await message.answer("❌ Действие отменено.", reply_markup=menu)
         return
 
+    await message.answer(
+        "❌ Для загрузки используйте фото, а не текст.\n\n"
+        "Отправьте фото товара или нажмите '❌ Отмена'",
+        reply_markup=get_cancel_keyboard()
+    )
+
+
+@router.message(LotCreation.waiting_for_photos)
+async def invalid_photos(message: Message):
+    """Handle invalid photo input (non-text, non-photo)"""
     await message.answer(
         "Пожалуйста, отправьте фото товара.",
         reply_markup=get_cancel_keyboard()
@@ -58,7 +71,8 @@ async def process_description(message: Message, state: FSMContext):
     """Process lot description"""
     if message.text == "❌ Отмена":
         await state.clear()
-        await message.answer("❌ Действие отменено.", reply_markup=get_main_menu())
+        menu = await get_user_menu(message.from_user.id)
+        await message.answer("❌ Действие отменено.", reply_markup=menu)
         return
 
     # Check if user has added photos
@@ -116,7 +130,8 @@ async def process_city(message: Message, state: FSMContext):
     """Process lot city"""
     if message.text == "❌ Отмена":
         await state.clear()
-        await message.answer("❌ Действие отменено.", reply_markup=get_main_menu())
+        menu = await get_user_menu(message.from_user.id)
+        await message.answer("❌ Действие отменено.", reply_markup=menu)
         return
 
     # Handle custom city input
@@ -153,7 +168,8 @@ async def process_size(message: Message, state: FSMContext):
     """Process lot size"""
     if message.text == "❌ Отмена":
         await state.clear()
-        await message.answer("❌ Действие отменено.", reply_markup=get_main_menu())
+        menu = await get_user_menu(message.from_user.id)
+        await message.answer("❌ Действие отменено.", reply_markup=menu)
         return
 
     # Validate size selection
@@ -183,7 +199,8 @@ async def process_wear(message: Message, state: FSMContext):
     """Process lot wear"""
     if message.text == "❌ Отмена":
         await state.clear()
-        await message.answer("❌ Действие отменено.", reply_markup=get_main_menu())
+        menu = await get_user_menu(message.from_user.id)
+        await message.answer("❌ Действие отменено.", reply_markup=menu)
         return
 
     # Validate wear selection
@@ -204,13 +221,13 @@ async def process_wear(message: Message, state: FSMContext):
     if lot_type == 'auction':
         price_text = (
             "💰 <b>Шаг 5/6 - Стартовая цена</b>\n\n"
-            "Укажите стартовую цену для аукциона (в сумах)\n\n"
+            "Укажите стартовую цену для аукциона (в тенгеах)\n\n"
             "💡 <b>Совет:</b> Оптимальная стартовая цена - 60-70% от желаемой"
         )
     else:
         price_text = (
             "💰 <b>Шаг 5/6 - Цена</b>\n\n"
-            "Укажите цену букета (в сумах)\n\n"
+            "Укажите цену букета (в тенгеах)\n\n"
             "💡 <b>Совет:</b> Указывайте справедливую цену за букет"
         )
 
@@ -227,7 +244,8 @@ async def process_price(message: Message, state: FSMContext):
     """Process lot price and create draft"""
     if message.text == "❌ Отмена":
         await state.clear()
-        await message.answer("❌ Действие отменено.", reply_markup=get_main_menu())
+        menu = await get_user_menu(message.from_user.id)
+        await message.answer("❌ Действие отменено.", reply_markup=menu)
         return
 
     try:
@@ -241,7 +259,7 @@ async def process_price(message: Message, state: FSMContext):
 
         if price < 1000:
             await message.answer(
-                "❌ Минимальная стартовая цена: 1,000 сум",
+                "❌ Минимальная стартовая цена: 1,000 тенге",
                 reply_markup=get_cancel_keyboard()
             )
             return
@@ -282,7 +300,7 @@ async def show_lot_draft(message: Message, lot_id: int, state: FSMContext):
     if not lot:
         await message.answer(
             "❌ Ошибка: лот не найден.",
-            reply_markup=get_main_menu()
+            reply_markup=await get_user_menu(message.from_user.id)
         )
         await state.clear()
         return
@@ -327,13 +345,14 @@ async def handle_draft_edit(callback: CallbackQuery, state: FSMContext):
         # Send to moderation
         await db.update_lot_status(lot_id, 'pending')
 
+        menu = await get_user_menu(callback.from_user.id)
         await callback.message.answer(
             "🎉 <b>Готово!</b>\n\n"
             "Ваш лот отправлен на модерацию администратору\n\n"
             "⏳ Обычно проверка занимает 5-15 минут\n\n"
             "Мы уведомим вас когда лот будет одобрен и опубликован",
             parse_mode="HTML",
-            reply_markup=get_main_menu()
+            reply_markup=menu
         )
 
         # Notify admins
@@ -447,7 +466,7 @@ async def finish_edit_photos(message: Message, state: FSMContext):
     data = await state.get_data()
     lot_id = data['lot_id']
 
-    if message.text == "Отмена":
+    if message.text == "❌ Отмена":
         await show_lot_draft(message, lot_id, state)
         await state.set_state(LotCreation.editing_draft)
         return
@@ -464,7 +483,7 @@ async def finish_edit_photos(message: Message, state: FSMContext):
 @router.message(LotCreation.edit_description, F.text)
 async def edit_description(message: Message, state: FSMContext):
     """Edit lot description"""
-    if message.text == "Отмена":
+    if message.text == "❌ Отмена":
         data = await state.get_data()
         await show_lot_draft(message, data['lot_id'], state)
         await state.set_state(LotCreation.editing_draft)
@@ -481,7 +500,7 @@ async def edit_description(message: Message, state: FSMContext):
 @router.message(LotCreation.edit_city, F.text)
 async def edit_city(message: Message, state: FSMContext):
     """Edit lot city"""
-    if message.text == "Отмена":
+    if message.text == "❌ Отмена":
         data = await state.get_data()
         await show_lot_draft(message, data['lot_id'], state)
         await state.set_state(LotCreation.editing_draft)
@@ -498,7 +517,7 @@ async def edit_city(message: Message, state: FSMContext):
 @router.message(LotCreation.edit_size, F.text)
 async def edit_size(message: Message, state: FSMContext):
     """Edit lot size"""
-    if message.text == "Отмена":
+    if message.text == "❌ Отмена":
         data = await state.get_data()
         await show_lot_draft(message, data['lot_id'], state)
         await state.set_state(LotCreation.editing_draft)
@@ -524,7 +543,7 @@ async def edit_size(message: Message, state: FSMContext):
 @router.message(LotCreation.edit_price, F.text)
 async def edit_price(message: Message, state: FSMContext):
     """Edit lot price"""
-    if message.text == "Отмена":
+    if message.text == "❌ Отмена":
         data = await state.get_data()
         await show_lot_draft(message, data['lot_id'], state)
         await state.set_state(LotCreation.editing_draft)
@@ -550,7 +569,7 @@ async def edit_price(message: Message, state: FSMContext):
 @router.message(LotCreation.edit_wear, F.text)
 async def edit_wear(message: Message, state: FSMContext):
     """Edit lot wear"""
-    if message.text == "Отмена":
+    if message.text == "❌ Отмена":
         data = await state.get_data()
         await show_lot_draft(message, data['lot_id'], state)
         await state.set_state(LotCreation.editing_draft)
@@ -585,7 +604,7 @@ async def confirm_delete_lot(callback: CallbackQuery, state: FSMContext):
     # Send message with main menu
     await callback.message.answer(
         "Возвращаемся в главное меню.",
-        reply_markup=get_main_menu()
+        reply_markup=await get_user_menu(message.from_user.id)
     )
     await state.clear()
 

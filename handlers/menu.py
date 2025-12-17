@@ -27,9 +27,26 @@ async def create_auction(message: Message, state: FSMContext):
     if not await check_registration(message):
         return
 
+    # Check if user has unpaid lots
+    unpaid_lots = await db.get_user_lots_by_status(message.from_user.id, 'approved_waiting_payment')
+
+    if unpaid_lots:
+        from utils import get_user_menu
+        menu = await get_user_menu(message.from_user.id)
+        await message.answer(
+            "⚠️ <b>У вас есть неоплаченный лот!</b>\n\n"
+            "Прежде чем создавать новый лот, необходимо оплатить предыдущий.\n\n"
+            f"📦 <b>Ожидает оплаты:</b> {unpaid_lots[0]['description']}\n"
+            f"💰 <b>Стоимость публикации:</b> 1000 тенге\n\n"
+            "После оплаты вы сможете создавать новые лоты.",
+            parse_mode="HTML",
+            reply_markup=menu
+        )
+        return
+
     await message.answer(
         "📸 <b>Шаг 1/6 - Фото букета</b>\n\n"
-        "Загрузите фото букета (от 1 до 10 фотографий)\n\n"
+        "Загрузите фото букета (от 1 до 10 фотографий) и нажмите кнопку 'Готов'\n\n"
         "💡 <b>Совет:</b> Чёткие фото при хорошем освещении привлекут больше покупателей",
         parse_mode="HTML",
         reply_markup=get_photos_keyboard()
@@ -38,10 +55,27 @@ async def create_auction(message: Message, state: FSMContext):
     await state.update_data(lot_type='auction')
 
 
-@router.message(F.text == "💐 Выставить букет")
+@router.message(F.text == "💐 Выставить букет по фиксированной цене")
 async def create_regular_sale(message: Message, state: FSMContext):
     """Start regular sale creation"""
     if not await check_registration(message):
+        return
+
+    # Check if user has unpaid lots
+    unpaid_lots = await db.get_user_lots_by_status(message.from_user.id, 'approved_waiting_payment')
+
+    if unpaid_lots:
+        from utils import get_user_menu
+        menu = await get_user_menu(message.from_user.id)
+        await message.answer(
+            "⚠️ <b>У вас есть неоплаченный лот!</b>\n\n"
+            "Прежде чем создавать новый лот, необходимо оплатить предыдущий.\n\n"
+            f"📦 <b>Ожидает оплаты:</b> {unpaid_lots[0]['description']}\n"
+            f"💰 <b>Стоимость публикации:</b> 1000 тенге\n\n"
+            "После оплаты вы сможете создавать новые лоты.",
+            parse_mode="HTML",
+            reply_markup=menu
+        )
         return
 
     await message.answer(

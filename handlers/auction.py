@@ -5,7 +5,7 @@ from datetime import datetime
 import logging
 
 from database import db
-from keyboards import get_bid_confirmation_keyboard, get_main_menu, get_cancel_keyboard
+from keyboards import get_bid_confirmation_keyboard, get_main_menu, get_cancel_keyboard, get_outbid_keyboard, get_mark_sold_keyboard
 from states import Bidding
 from utils import format_lot_message, validate_bid, calculate_end_time, format_price
 import config
@@ -14,9 +14,9 @@ router = Router()
 logger = logging.getLogger(__name__)
 
 
-@router.callback_query(F.data.startswith("buy:"))
-async def handle_buy(callback: CallbackQuery, state: FSMContext):
-    """Handle purchase of item at fixed price"""
+@router.callback_query(F.data.startswith("contact_seller:"))
+async def handle_contact_seller(callback: CallbackQuery, state: FSMContext):
+    """Handle contact seller request for fixed price items"""
     lot_id = int(callback.data.split(":")[1])
 
     lot = await db.get_lot(lot_id)
@@ -26,102 +26,64 @@ async def handle_buy(callback: CallbackQuery, state: FSMContext):
         return
 
     if lot['status'] not in ['approved', 'active']:
-        await callback.answer("Товар продан!", show_alert=True)
-        return
-
-    if lot.get('lot_type') != 'regular':
-        await callback.answer("Это не обычная продажа!", show_alert=True)
-        return
-
-    # Check if already sold
-    if lot.get('leader_id'):
         await callback.answer("Товар уже продан!", show_alert=True)
         return
 
-    from bot import bot
-    from utils import get_photos_list, create_media_group
+    if lot.get('lot_type') != 'regular':
+        await callback.answer("Это не букет на продажу!", show_alert=True)
+        return
 
-    # Mark as sold
-    await db.update_lot_field(lot_id, 'leader_id', callback.from_user.id)
-    await db.update_lot_status(lot_id, 'finished')
+    from bot import bot
 
     # Get seller and buyer info
     seller = await db.get_user(lot['owner_id'])
     buyer = await db.get_user(callback.from_user.id)
 
+    if not seller or not buyer:
+        await callback.answer("Ошибка получения данных пользователя!", show_alert=True)
+        return
+
     seller_username = f"@{seller['username']}" if seller.get('username') else "нет username"
     buyer_username = f"@{buyer['username']}" if buyer.get('username') else "нет username"
 
-    # Notify buyer
+    # Notify buyer with seller contact
     try:
         await bot.send_message(
             chat_id=callback.from_user.id,
-            text=f"✅ <b>Вы купили букет!</b>\n\n"
+            text=f"✅ <b>Отлично, мы передали Ваш контакт владельцу букета.</b>\n\n"
                  f"📦 <b>Товар:</b> {lot['description']}\n"
-                 f"💰 <b>Цена:</b> {format_price(lot['start_price'])} сум\n"
+                 f"💰 <b>Цена:</b> {format_price(lot['start_price'])} тенге\n"
                  f"🏙️ <b>Город:</b> {lot['city']}\n\n"
                  f"👤 <b>Контакт продавца:</b>\n"
                  f"Имя: {seller['name']}\n"
                  f"Username: {seller_username}\n"
                  f"Телефон: {seller['phone']}\n\n"
-                 f"💬 Свяжитесь с продавцом для получения товара и оплаты",
+                 f"🙏 Оставайтесь на связи, если владелец не свяжется с Вами в течении часа, то скорей всего букет уже продан",
             parse_mode="HTML"
         )
     except Exception as e:
         logger.error(f"Failed to notify buyer: {e}")
 
-    # Notify seller
+    # Notify seller with buyer contact and "Sold" button
     try:
         await bot.send_message(
             chat_id=lot['owner_id'],
-            text=f"🎉 <b>Ваш букет продан!</b>\n\n"
+            text=f"🔔 <b>Кто-то заинтересовался вашим букетом!</b>\n\n"
                  f"📦 <b>Товар:</b> {lot['description']}\n"
-                 f"💰 <b>Цена:</b> {format_price(lot['start_price'])} сум\n\n"
+                 f"💰 <b>Цена:</b> {format_price(lot['start_price'])} тенге\n\n"
                  f"👤 <b>Контакт покупателя:</b>\n"
                  f"Имя: {buyer['name']}\n"
                  f"Username: {buyer_username}\n"
                  f"Телефон: {buyer['phone']}\n\n"
-                 f"💬 Свяжитесь с покупателем для передачи товара и получения оплаты",
-            parse_mode="HTML"
+                 f"💬 Свяжитесь с покупателем для уточнения деталей\n\n"
+                 f"После успешной продажи нажмите кнопку ниже:",
+            parse_mode="HTML",
+            reply_markup=get_mark_sold_keyboard(lot_id)
         )
     except Exception as e:
         logger.error(f"Failed to notify seller: {e}")
 
-    # Update channel message to show "SOLD"
-    if lot.get('channel_message_id'):
-        try:
-            from utils import format_sold_message, get_photos_list
-
-            # Format sold message
-            sold_text = format_sold_message(lot, lot['start_price'])
-
-            # Get photos to determine if it's a single photo or media group
-            photos = get_photos_list(lot['photos'])
-
-            # Edit message (remove keyboard to prevent further interaction)
-            if len(photos) == 1:
-                # Single photo - edit caption
-                await bot.edit_message_caption(
-                    chat_id=config.CHANNEL_ID,
-                    message_id=lot['channel_message_id'],
-                    caption=sold_text,
-                    parse_mode="HTML",
-                    reply_markup=None
-                )
-            else:
-                # Media group - can't edit, so we'll try to delete and ignore errors
-                # Note: Media groups can't have their captions edited easily
-                try:
-                    await bot.delete_message(
-                        chat_id=config.CHANNEL_ID,
-                        message_id=lot['channel_message_id']
-                    )
-                except Exception:
-                    pass
-        except Exception as e:
-            logger.error(f"Failed to update channel message: {e}")
-
-    await callback.answer("✅ Вы купили этот букет! Проверьте сообщения от бота.")
+    await callback.answer("✅ Ваш контакт отправлен продавцу! Проверьте сообщения от бота.")
 
 
 @router.callback_query(F.data.startswith("participate:"))
@@ -143,6 +105,11 @@ async def handle_participate(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Это не аукцион! Используйте кнопку 'Купить'", show_alert=True)
         return
 
+    # Check if user is the owner of the lot
+    if lot['owner_id'] == callback.from_user.id:
+        await callback.answer("❌ Вы не можете участвовать в аукционе на свой букет!", show_alert=True)
+        return
+
     # Note: Auction timer will start when first bid is confirmed, not here
 
     # Show lot info and ask for bid
@@ -153,7 +120,7 @@ async def handle_participate(callback: CallbackQuery, state: FSMContext):
     bid_count = len(set([bid['user_id'] for bid in bids]))  # Unique participants
 
     current_price = lot.get('current_price') or lot['start_price']
-    MIN_BID_STEP = 1000
+    MIN_BID_STEP = 500
 
     # Calculate minimum bid
     if lot.get('current_price') and lot['current_price'] > lot['start_price']:
@@ -171,6 +138,7 @@ async def handle_participate(callback: CallbackQuery, state: FSMContext):
 
     text += f"👥 <b>Количество участников:</b> {bid_count}\n"
     text += f"📊 <b>Минимальная ставка:</b> {format_price(min_bid)} сум\n"
+    text += f"\n📋 <b>Участвуя в аукционе, вы </b><a href='https://telegra.ph/Re-Bloom---Term-of-Use-12-06'>соглашаетесь с правилами</a>\n"
     text += f"\n💬 Введите вашу ставку:"
 
     # Send photo(s) with lot info to user (private) and use ForceReply so reply_to_message exists
@@ -371,23 +339,35 @@ async def confirm_bid(callback: CallbackQuery, state: FSMContext):
 
     await callback.message.edit_text(confirmation_msg, parse_mode="HTML")
 
+    # Restore main menu after bid confirmation
+    from bot import bot
+    from utils import get_user_menu
+    menu = await get_user_menu(callback.from_user.id)
+    await bot.send_message(
+        chat_id=callback.from_user.id,
+        text="Используйте меню ниже для навигации:",
+        reply_markup=menu
+    )
+
     # Update channel message with new bid info
     if lot.get('channel_message_id'):
         from bot import bot
+        from bot import bot_username
         from utils import format_lot_message, format_auction_status, get_photos_list
         from keyboards import get_participate_keyboard
 
         try:
-            updated_text = format_lot_message(lot) + format_auction_status(lot)
             photos = get_photos_list(lot['photos'])
 
             if len(photos) == 1:
+                # Single photo - edit caption
+                updated_text = format_lot_message(lot) + format_auction_status(lot)
                 await bot.edit_message_caption(
                     chat_id=config.CHANNEL_ID,
                     message_id=lot['channel_message_id'],
                     caption=updated_text,
                     parse_mode="HTML",
-                    reply_markup=get_participate_keyboard(lot_id)
+                    reply_markup=get_participate_keyboard(lot_id, bot_username)
                 )
 
                 if auction_just_started:
@@ -395,19 +375,23 @@ async def confirm_bid(callback: CallbackQuery, state: FSMContext):
                 else:
                     logger.info(f"📢 Channel message updated - new bid {amount} for auction {lot_id}")
             else:
-                # Media group: cannot edit caption reliably — post a status comment as a reply to the original post
-                status_prefix = "🚀 Торги начались!" if auction_just_started else "ℹ️ Обновление торгов"
-                await bot.send_message(
-                    chat_id=config.CHANNEL_ID,
-                    text=f"{status_prefix}\n\n" + updated_text,
-                    parse_mode="HTML",
-                    reply_to_message_id=lot['channel_message_id']
-                )
+                # Media group - edit button message with status
+                if lot.get('channel_button_message_id'):
+                    button_text = "👇 Нажмите чтобы участвовать в аукционе\n\n"
+                    button_text += format_auction_status(lot)
 
-                if auction_just_started:
-                    logger.info(f"📢 Posted status reply for media group auction {lot_id} - timer visible in thread")
-                else:
-                    logger.info(f"📢 Posted status reply for media group auction {lot_id} - new bid {amount}")
+                    await bot.edit_message_text(
+                        chat_id=config.CHANNEL_ID,
+                        message_id=lot['channel_button_message_id'],
+                        text=button_text,
+                        parse_mode="HTML",
+                        reply_markup=get_participate_keyboard(lot_id, bot_username)
+                    )
+
+                    if auction_just_started:
+                        logger.info(f"📢 Button message updated - auction {lot_id} timer is now visible!")
+                    else:
+                        logger.info(f"📢 Button message updated - new bid {amount} for auction {lot_id}")
         except Exception as e:
             logger.error(f"Failed to update channel message after bid: {e}")
 
@@ -420,7 +404,8 @@ async def confirm_bid(callback: CallbackQuery, state: FSMContext):
                 text=f"⚠️ <b>Вашу ставку перебили!</b>\n\n"
                      f"📦 Лот: {lot['description']}\n"
                      f"💰 Новая ставка: {format_price(amount)} сум",
-                parse_mode="HTML"
+                parse_mode="HTML",
+                reply_markup=get_outbid_keyboard(lot_id)
             )
         except Exception:
             pass
@@ -433,3 +418,74 @@ async def cancel_bid(callback: CallbackQuery, state: FSMContext):
     """Cancel bid"""
     await callback.message.edit_text("Отменено.")
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("mark_sold:"))
+async def handle_mark_sold(callback: CallbackQuery, state: FSMContext):
+    """Handle seller marking lot as sold"""
+    lot_id = int(callback.data.split(":")[1])
+
+    lot = await db.get_lot(lot_id)
+
+    if not lot:
+        await callback.answer("Лот не найден!", show_alert=True)
+        return
+
+    # Check if user is the owner
+    if lot['owner_id'] != callback.from_user.id:
+        await callback.answer("❌ Только владелец лота может пометить его как проданный!", show_alert=True)
+        return
+
+    # Check if already sold
+    if lot['status'] == 'finished':
+        await callback.answer("Этот лот уже помечен как проданный!", show_alert=True)
+        return
+
+    # Mark as sold
+    await db.update_lot_status(lot_id, 'finished')
+
+    # Update the message to remove the button
+    try:
+        await callback.message.edit_text(
+            callback.message.text + "\n\n✅ <b>Букет помечен как проданный!</b>",
+            parse_mode="HTML"
+        )
+    except Exception:
+        pass
+
+    # Update channel message to show "SOLD"
+    if lot.get('channel_message_id'):
+        from bot import bot
+        from utils import format_sold_message, get_photos_list
+
+        try:
+            # Format sold message
+            sold_text = format_sold_message(lot, lot['start_price'])
+
+            # Get photos to determine if it's a single photo or media group
+            photos = get_photos_list(lot['photos'])
+
+            # Edit message (remove keyboard to prevent further interaction)
+            if len(photos) == 1:
+                # Single photo - edit caption
+                await bot.edit_message_caption(
+                    chat_id=config.CHANNEL_ID,
+                    message_id=lot['channel_message_id'],
+                    caption=sold_text,
+                    parse_mode="HTML",
+                    reply_markup=None
+                )
+            else:
+                # Media group - edit button message to show sold
+                if lot.get('channel_button_message_id'):
+                    await bot.edit_message_text(
+                        chat_id=config.CHANNEL_ID,
+                        message_id=lot['channel_button_message_id'],
+                        text=sold_text,
+                        parse_mode="HTML",
+                        reply_markup=None
+                    )
+        except Exception as e:
+            logger.error(f"Failed to update channel message: {e}")
+
+    await callback.answer("✅ Букет помечен как проданный! Сообщение в канале обновлено.")

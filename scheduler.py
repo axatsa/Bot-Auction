@@ -19,7 +19,7 @@ async def schedule_auction_completion(lot_id: int, end_time: datetime):
     )
 
     # Schedule channel updates (every 30 min and at key moments)
-    update_intervals = [5, 2]  # minutes before end (adjusted for 10-minute auctions)
+    update_intervals = [5]  # minutes before end (adjusted for 10-minute auctions)
 
     for minutes in update_intervals:
         update_time = end_time - timedelta(minutes=minutes)
@@ -32,7 +32,7 @@ async def schedule_auction_completion(lot_id: int, end_time: datetime):
             )
 
     # Schedule participant notifications before auction ends
-    notification_intervals = [5, 2]  # notify participants 5 and 2 minutes before end
+    notification_intervals = [5]  # notify participants 5 minutes before end
 
     for minutes in notification_intervals:
         notification_time = end_time - timedelta(minutes=minutes)
@@ -48,6 +48,7 @@ async def schedule_auction_completion(lot_id: int, end_time: datetime):
 async def notify_participants_before_end(lot_id: int, minutes_left: int):
     """Notify all auction participants that auction is ending soon"""
     from bot import bot
+    from keyboards import get_outbid_keyboard
 
     lot = await db.get_lot(lot_id)
     if not lot:
@@ -81,7 +82,8 @@ async def notify_participants_before_end(lot_id: int, minutes_left: int):
                          f"💰 <b>Текущая ставка:</b> {format_price(current_price)} сум\n"
                          f"💡 У вас ещё есть время перебить ставку!\n\n"
                          f"⏱ До завершения осталось: <b>{minutes_left} минут</b>",
-                    parse_mode="HTML"
+                    parse_mode="HTML",
+                    reply_markup=get_outbid_keyboard(lot_id)
                 )
         except Exception as e:
             print(f"Failed to notify participant {participant_id}: {e}")
@@ -99,11 +101,13 @@ async def update_auction_status(lot_id: int):
         return
 
     try:
-        updated_text = format_lot_message(lot) + format_auction_status(lot)
-
         photos = get_photos_list(lot['photos'])
 
         if len(photos) == 1:
+            # Single photo - edit caption
+            lot_type_label = "🔥 Аукцион" if lot.get('lot_type') == 'auction' else "💐 Букет на продажу"
+            updated_text = f"<b>{lot_type_label}</b>\n\n"
+            updated_text += format_lot_message(lot, include_terms_link=True) + format_auction_status(lot)
             await bot.edit_message_caption(
                 chat_id=config.CHANNEL_ID,
                 message_id=lot['channel_message_id'],
@@ -112,13 +116,18 @@ async def update_auction_status(lot_id: int):
                 reply_markup=get_participate_keyboard(lot_id)
             )
         else:
-            # For media groups, post a status reply so users see the update
-            await bot.send_message(
-                chat_id=config.CHANNEL_ID,
-                text=f"ℹ️ Обновление торгов\n\n" + updated_text,
-                parse_mode="HTML",
-                reply_to_message_id=lot['channel_message_id']
-            )
+            # Media group - edit button message with status
+            if lot.get('channel_button_message_id'):
+                button_text = "👇 Нажмите чтобы участвовать в аукционе\n\n"
+                button_text += format_auction_status(lot)
+
+                await bot.edit_message_text(
+                    chat_id=config.CHANNEL_ID,
+                    message_id=lot['channel_button_message_id'],
+                    text=button_text,
+                    parse_mode="HTML",
+                    reply_markup=get_participate_keyboard(lot_id)
+                )
 
     except Exception as e:
         print(f"Failed to update auction {lot_id}: {e}")
@@ -131,6 +140,7 @@ async def complete_auction(lot_id: int):
     lot = await db.get_lot(lot_id)
 
     if not lot:
+        print(f"ERROR: Lot {lot_id} not found!")
         return
 
     # Get all bids
@@ -138,6 +148,7 @@ async def complete_auction(lot_id: int):
 
     # Update status
     if bids:
+        print(f"INFO: Completing auction {lot_id} with {len(bids)} bids")
         await db.update_lot_status(lot_id, 'finished')
 
         # Winner is the one with highest bid (already leader)
@@ -148,11 +159,32 @@ async def complete_auction(lot_id: int):
         winner = await db.get_user(winner_id)
         owner = await db.get_user(lot['owner_id'])
 
-        # Format username safely
+        # Check if winner exists, use fallback if not
+        if not winner:
+            print(f"ERROR: Winner user {winner_id} not found in database!")
+            winner = {
+                'name': f'Пользователь ID: {winner_id}',
+                'username': None,
+                'phone': 'не указан'
+            }
+
+        # Check if owner exists, use fallback if not
+        if not owner:
+            print(f"ERROR: Owner user {lot['owner_id']} not found in database!")
+            owner = {
+                'name': f'Пользователь ID: {lot["owner_id"]}',
+                'username': None,
+                'phone': 'не указан'
+            }
+
+        # Format usernames safely
         owner_username = f"@{owner['username']}" if owner.get('username') else "нет username"
+        winner_username = f"@{winner['username']}" if winner.get('username') else "нет username"
 
         # Notify winner
         try:
+            from utils import get_user_menu
+            menu = await get_user_menu(winner_id)
             await bot.send_message(
                 chat_id=winner_id,
                 text=f"🎉 <b>Поздравляем! Вы выиграли аукцион!</b>\n\n"
@@ -164,19 +196,19 @@ async def complete_auction(lot_id: int):
                      f"Username: {owner_username}\n"
                      f"Телефон: {owner['phone']}\n\n"
                      f"💬 Свяжитесь с продавцом для получения товара и оплаты",
-                parse_mode="HTML"
+                parse_mode="HTML",
+                reply_markup=menu
             )
         except Exception as e:
             print(f"Failed to notify winner: {e}")
-
-        # Format winner username safely
-        winner_username = f"@{winner['username']}" if winner.get('username') else "нет username"
 
         # Calculate profit percentage
         profit_percent = int(((winning_bid - lot['start_price']) / lot['start_price']) * 100) if lot['start_price'] > 0 else 0
 
         # Notify owner
         try:
+            from utils import get_user_menu
+            menu = await get_user_menu(lot['owner_id'])
             await bot.send_message(
                 chat_id=lot['owner_id'],
                 text=f"🎉 <b>Ваш лот продан!</b>\n\n"
@@ -188,7 +220,8 @@ async def complete_auction(lot_id: int):
                      f"Username: {winner_username}\n"
                      f"Телефон: {winner['phone']}\n\n"
                      f"💬 Свяжитесь с покупателем для передачи товара и получения оплаты",
-                parse_mode="HTML"
+                parse_mode="HTML",
+                reply_markup=menu
             )
         except Exception as e:
             print(f"Failed to notify owner: {e}")
@@ -208,10 +241,12 @@ async def complete_auction(lot_id: int):
                 print(f"Failed to notify admin: {e}")
 
         # Notify losers
+        from utils import get_user_menu
         participants = await db.get_lot_participants(lot_id)
         for participant_id in participants:
             if participant_id != winner_id:
                 try:
+                    menu = await get_user_menu(participant_id)
                     await bot.send_message(
                         chat_id=participant_id,
                         text=f"😔 <b>Аукцион завершён</b>\n\n"
@@ -219,7 +254,8 @@ async def complete_auction(lot_id: int):
                              f"💔 Ваша ставка была перебита\n"
                              f"💰 Финальная цена: {format_price(winning_bid)} тенге\n\n"
                              f"Не расстраивайтесь, следите за новыми лотами в канале!",
-                        parse_mode="HTML"
+                        parse_mode="HTML",
+                        reply_markup=menu
                     )
                 except Exception:
                     pass
@@ -230,6 +266,8 @@ async def complete_auction(lot_id: int):
 
         # Notify owner
         try:
+            from utils import get_user_menu
+            menu = await get_user_menu(lot['owner_id'])
             await bot.send_message(
                 chat_id=lot['owner_id'],
                 text=f"😔 <b>Аукцион завершён</b>\n\n"
@@ -239,7 +277,8 @@ async def complete_auction(lot_id: int):
                      f"• Снизьте стартовую цену\n"
                      f"• Добавьте больше качественных фото\n"
                      f"• Улучшите описание товара",
-                parse_mode="HTML"
+                parse_mode="HTML",
+                reply_markup=menu
             )
         except Exception:
             pass
@@ -261,7 +300,8 @@ async def complete_auction(lot_id: int):
             from utils import format_sold_message, get_photos_list
 
             # Determine final price
-            final_price = winning_bid if bids else lot['start_price']
+            final_price = lot.get('current_price', lot['start_price'])
+            print(f"INFO: Updating channel message for lot {lot_id}, final price: {final_price}")
 
             # Format sold message
             sold_text = format_sold_message(lot, final_price)
@@ -280,13 +320,16 @@ async def complete_auction(lot_id: int):
                     reply_markup=None
                 )
             else:
-                # Media group: post a final status reply instead of editing
-                await bot.send_message(
-                    chat_id=config.CHANNEL_ID,
-                    text=sold_text,
-                    parse_mode="HTML",
-                    reply_to_message_id=lot['channel_message_id']
-                )
+                # Media group - edit button message to show final status
+                if lot.get('channel_button_message_id'):
+                    await bot.edit_message_text(
+                        chat_id=config.CHANNEL_ID,
+                        message_id=lot['channel_button_message_id'],
+                        text=sold_text,
+                        parse_mode="HTML",
+                        reply_markup=None
+                    )
+            print(f"SUCCESS: Channel message updated for lot {lot_id}")
         except Exception as e:
             print(f"Failed to update channel message: {e}")
 

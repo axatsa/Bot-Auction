@@ -193,9 +193,20 @@ async def handle_participate(callback: CallbackQuery, state: FSMContext):
 @router.message(F.text)
 async def process_bid(message: Message, state: FSMContext):
     """Process bid amount from user if they're waiting to enter a bid"""
-    # Check if user is waiting to enter a bid
+    # Check if user is waiting to enter a bid FIRST
     if message.from_user.id not in awaiting_bids:
         # Not waiting for bid - let other handlers process this
+        logger.debug(f"🔄 process_bid: User {message.from_user.id} not in awaiting_bids, skipping text: '{message.text}'")
+        return
+
+    # Ignore commands (start with /)
+    if message.text.startswith('/'):
+        logger.info(f"🔄 process_bid: Ignoring command '{message.text}' from user {message.from_user.id}")
+        return
+
+    # Ignore menu buttons (contain emoji or specific keywords)
+    menu_keywords = ['Добавить', 'Выставить', 'Текущие', 'Режим', 'Модерация', 'История']
+    if any(keyword in message.text for keyword in menu_keywords):
         return
 
     lot_id = awaiting_bids[message.from_user.id]
@@ -314,7 +325,7 @@ async def confirm_bid(callback: CallbackQuery, state: FSMContext):
     confirmation_msg += f"🥇 Вы — текущий лидер аукциона!"
 
     if auction_just_started:
-        confirmation_msg += f"\n\n⏰ <b>Торги начались!</b>\nДо завершения: 10 минут"
+        confirmation_msg += f"\n\n⏰ <b>Торги начались!</b>\nДо завершения: 2 часа"
 
     await callback.message.edit_text(confirmation_msg, parse_mode="HTML")
 

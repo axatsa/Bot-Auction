@@ -126,7 +126,7 @@ def get_bid_confirmation_keyboard(lot_id: int, amount: int) -> InlineKeyboardMar
     kb.button(text="✅ Да", callback_data=f"confirm_bid:{lot_id}:{amount}")
     kb.button(text="✏️ Изменить", callback_data=f"change_bid:{lot_id}")
     kb.button(text="❌ Перестать участвовать", callback_data=f"stop_participation:{lot_id}")
-    kb.adjust(1)
+    kb.adjust(2)
     return kb.as_markup()
 
 

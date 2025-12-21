@@ -164,17 +164,11 @@ async def show_current_auctions(message: Message):
             logger.error(f"Failed to send lot {lot['id']}: {e}")
 
 
-# Debug handler - catches ONLY unhandled text messages when user is NOT in a state
-@router.message(F.text)
-async def debug_unhandled_text(message: Message, state: FSMContext):
-    """Debug: catch any unhandled text message (only when not in a state)"""
-    current_state = await state.get_state()
-    saved_data = await state.get_data()
-
-    logger.warning(f"⚠️ MENU.PY caught text: '{message.text}' from user {message.from_user.id} (chat: {message.chat.id}), state: {current_state}, data: {saved_data}")
-    logger.warning(f"⚠️ State key in MENU: bot={state.key.bot_id}, chat={state.key.chat_id}, user={state.key.user_id}")
-
-    # If user is in some state, don't log - let the state handler deal with it
-    if current_state is not None:
-        logger.debug(f"Message '{message.text}' from user {message.from_user.id} in state {current_state} - letting state handler process it")
-        return
+# Debug handler is commented out to avoid conflicts with auction bid handler
+# Only enable for debugging purposes
+# @router.message(F.text)
+# async def debug_unhandled_text(message: Message, state: FSMContext):
+#     """Debug: catch any unhandled text message (only when not in a state)"""
+#     current_state = await state.get_state()
+#     saved_data = await state.get_data()
+#     logger.warning(f"⚠️ MENU.PY caught text: '{message.text}' from user {message.from_user.id}, state: {current_state}, data: {saved_data}")

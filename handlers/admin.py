@@ -47,6 +47,10 @@ async def switch_to_admin_mode(message: Message):
 @router.message(Command("admin"))
 async def cmd_admin(message: Message, state: FSMContext):
     """Handle /admin command"""
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info(f"🔧 /admin command received from user {message.from_user.id}")
+
     # Check if already admin
     if await is_admin(message.from_user.id):
         await message.answer(
@@ -773,7 +777,7 @@ async def handle_payment_verification(callback: CallbackQuery, state: FSMContext
                         f"Ваш лот опубликован в канале!\n\n"
                         f"📦 <b>Лот:</b> {lot['description']}\n"
                         f"💰 <b>Стартовая цена:</b> {format_price(lot['start_price'])} тенге\n"
-                        f"⏰ <b>Длительность:</b> 10 минут\n\n"
+                        f"⏰ <b>Длительность:</b> 2 часа\n\n"
                         f"Аукцион начнётся когда кто-то сделает первую ставку"
                     )
                 else:

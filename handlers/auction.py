@@ -1,5 +1,5 @@
 from aiogram import Router, F
-from aiogram.types import CallbackQuery, Message, ForceReply
+from aiogram.types import CallbackQuery, Message
 from aiogram.fsm.context import FSMContext
 from datetime import datetime
 import logging
@@ -12,6 +12,9 @@ import config
 
 router = Router()
 logger = logging.getLogger(__name__)
+
+# Dictionary to track users waiting to enter bids: {user_id: lot_id}
+awaiting_bids = {}
 
 
 @router.callback_query(F.data.startswith("contact_seller:"))
@@ -110,10 +113,12 @@ async def handle_participate(callback: CallbackQuery, state: FSMContext):
         await callback.answer("❌ Вы не можете участвовать в аукционе на свой букет!", show_alert=True)
         return
 
-    # Note: Auction timer will start when first bid is confirmed, not here
-
-    # Show lot info and ask for bid
-    lot = await db.get_lot(lot_id)  # Refresh lot data
+    # Check if user is already bidding on another lot
+    if callback.from_user.id in awaiting_bids:
+        previous_lot_id = awaiting_bids[callback.from_user.id]
+        if previous_lot_id != lot_id:
+            logger.info(f"⚠️ User {callback.from_user.id} switching from lot {previous_lot_id} to lot {lot_id}")
+            # Will be overwritten below
 
     # Get bid statistics
     bids = await db.get_lot_bids(lot_id)
@@ -139,95 +144,70 @@ async def handle_participate(callback: CallbackQuery, state: FSMContext):
     text += f"👥 <b>Количество участников:</b> {bid_count}\n"
     text += f"📊 <b>Минимальная ставка:</b> {format_price(min_bid)} сум\n"
     text += f"\n📋 <b>Участвуя в аукционе, вы </b><a href='https://telegra.ph/Re-Bloom---Term-of-Use-12-06'>соглашаетесь с правилами</a>\n"
-    text += f"\n💬 Введите вашу ставку:"
+    text += f"\n💬 <b>Напишите сумму вашей ставки:</b>"
 
-    # Send photo(s) with lot info to user (private) and use ForceReply so reply_to_message exists
+    # Send photo(s) with lot info to user (private)
     from bot import bot
     from utils import get_photos_list, create_media_group
 
     photos = get_photos_list(lot['photos'])
 
-    # Append a simple marker with lot id so we can identify replies
-    marker = f"\n\n#lot:{lot_id}"
-
     try:
         if len(photos) == 0:
             # No photos
-            sent = await bot.send_message(
+            await bot.send_message(
                 chat_id=callback.from_user.id,
-                text=text + marker,
-                parse_mode="HTML",
-                reply_markup=ForceReply(force_reply=True, input_field_placeholder="Введите вашу ставку")
+                text=text,
+                parse_mode="HTML"
             )
         elif len(photos) == 1:
-            # Single photo - send photo with caption + force reply via separate message
+            # Single photo - send photo with caption
             await bot.send_photo(
                 chat_id=callback.from_user.id,
                 photo=photos[0],
                 caption=text,
                 parse_mode="HTML"
             )
-            sent = await bot.send_message(
-                chat_id=callback.from_user.id,
-                text="Отправьте вашу ставку как ответ на это сообщение:" + marker,
-                reply_markup=ForceReply(force_reply=True, input_field_placeholder="Введите вашу ставку")
-            )
         else:
-            # Multiple photos - send as media group + message with force reply
+            # Multiple photos - send as media group
             media = create_media_group(photos, text)
             await bot.send_media_group(
                 chat_id=callback.from_user.id,
                 media=media
             )
-            sent = await bot.send_message(
-                chat_id=callback.from_user.id,
-                text="Отправьте вашу ставку как ответ на это сообщение:" + marker,
-                reply_markup=ForceReply(force_reply=True, input_field_placeholder="Введите вашу ставку")
-            )
     except Exception as e:
         # If can't send photo, attempt to reply in channel or fallback
         logger.error(f"Failed to send photos or DM: {e}")
-        await callback.message.answer(text + marker, parse_mode="HTML", reply_markup=get_cancel_keyboard())
-        await callback.answer()
+        await callback.answer("❌ Не могу отправить сообщение в личку. Убедитесь, что вы запустили бота командой /start", show_alert=True)
         return
 
-    # Do NOT use FSM state here; we rely on reply_to_message marker + confirmation callback data
-    logger.info(f"📍 Sent force-reply to user {callback.from_user.id} for lot {lot_id}")
+    # Mark user as waiting for bid input
+    awaiting_bids[callback.from_user.id] = lot_id
+
+    logger.info(f"📍 Sent bid request to user {callback.from_user.id} for lot {lot_id}")
     await callback.answer()
 
 
-# Now process replies to the ForceReply message. We don't rely on FSM state.
-@router.message(F.text & F.reply_to_message)
+# Handle text messages that might be bids
+# This handler must be registered BEFORE menu.py handlers!
+@router.message(F.text)
 async def process_bid(message: Message, state: FSMContext):
-    """Process bid amount — only when user replied to bot's ForceReply message that contains marker '#lot:<id>'"""
-    # Ensure this is a reply to the bot message that contains our marker
-    if not message.reply_to_message.text:
-        # Not our message -> ignore
+    """Process bid amount from user if they're waiting to enter a bid"""
+    # Check if user is waiting to enter a bid
+    if message.from_user.id not in awaiting_bids:
+        # Not waiting for bid - let other handlers process this
         return
 
-    reply_text = message.reply_to_message.text
-    if "#lot:" not in reply_text:
-        # Not related to bidding -> ignore
-        return
+    lot_id = awaiting_bids[message.from_user.id]
 
-    # Extract lot_id from marker
-    try:
-        marker_part = [part for part in reply_text.splitlines() if part.strip().startswith("#lot:")][0].strip()
-        lot_id = int(marker_part.split(":")[1])
-    except Exception:
-        logger.warning(f"Couldn't extract lot id from reply_to_message for user {message.from_user.id}")
-        return
+    logger.info(f"🎯 process_bid HANDLER CALLED. User: {message.from_user.id}, Lot: {lot_id}, Text: '{message.text}'")
 
-    logger.info(f"🎯 process_bid HANDLER CALLED (reply flow). User: {message.from_user.id}, Lot: {lot_id}, Text: '{message.text}'")
-
-    # Check if message has text
-    if not message.text:
-        await message.answer("❌ Пожалуйста, введите числовую ставку!")
-        return
-
-    # Handle cancel (user can send 'Отмена' as text)
+    # Handle cancel
     if message.text.strip().lower() in ["отмена", "cancel", "❌ отмена"]:
-        await message.answer("❌ Отменено.", reply_markup=get_main_menu())
+        del awaiting_bids[message.from_user.id]
+        from utils import get_user_menu
+        menu = await get_user_menu(message.from_user.id)
+        await message.answer("❌ Отменено.", reply_markup=menu)
         return
 
     # Try to parse the bid amount
@@ -245,7 +225,11 @@ async def process_bid(message: Message, state: FSMContext):
 
     lot = await db.get_lot(lot_id)
     if not lot:
-        await message.answer("Лот не найден! Возможно, аукцион завершён.", reply_markup=get_main_menu())
+        # Remove from awaiting_bids
+        del awaiting_bids[message.from_user.id]
+        from utils import get_user_menu
+        menu = await get_user_menu(message.from_user.id)
+        await message.answer("Лот не найден! Возможно, аукцион завершён.", reply_markup=menu)
         return
 
     # Validate bid against current price
@@ -255,22 +239,17 @@ async def process_bid(message: Message, state: FSMContext):
         await message.answer(error_msg)
         return
 
-    # Ask for confirmation — include amount in callback data so we don't need FSM
-    amount_int = int(amount)  # use integer sum to keep callback_data short
+    # Ask for confirmation with three buttons
+    amount_int = int(amount)
 
-    # Create inline keyboard manually with amount in callback_data
-    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"confirm_bid:{lot_id}:{amount_int}"),
-            InlineKeyboardButton(text="❌ Отмена", callback_data=f"cancel_bid:{lot_id}")
-        ]
-    ])
-
+    # Send confirmation message (amount is in callback data, no need to store in FSM)
     await message.answer(
-        f"<b>Подтверждение ставки</b>\n\nВаша ставка: {format_price(amount_int)} сум\nЛот: {lot['description']}\n\nПодтвердить?",
+        f"<b>Подтверждение ставки</b>\n\n"
+        f"💰 Ваша ставка: {format_price(amount_int)} сум\n"
+        f"📦 Лот: {lot['description']}\n\n"
+        f"<b>Подтвердить ставку?</b>",
         parse_mode="HTML",
-        reply_markup=kb
+        reply_markup=get_bid_confirmation_keyboard(lot_id, amount_int)
     )
 
 
@@ -338,6 +317,10 @@ async def confirm_bid(callback: CallbackQuery, state: FSMContext):
         confirmation_msg += f"\n\n⏰ <b>Торги начались!</b>\nДо завершения: 10 минут"
 
     await callback.message.edit_text(confirmation_msg, parse_mode="HTML")
+
+    # Remove user from awaiting_bids (bid completed)
+    if callback.from_user.id in awaiting_bids:
+        del awaiting_bids[callback.from_user.id]
 
     # Restore main menu after bid confirmation
     from bot import bot
@@ -413,10 +396,52 @@ async def confirm_bid(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("cancel_bid:"))
-async def cancel_bid(callback: CallbackQuery, state: FSMContext):
-    """Cancel bid"""
-    await callback.message.edit_text("Отменено.")
+@router.callback_query(F.data.startswith("change_bid:"))
+async def change_bid(callback: CallbackQuery, state: FSMContext):
+    """Handle change bid button - user wants to enter a different amount"""
+    lot_id = int(callback.data.split(":")[1])
+
+    # Edit confirmation message
+    await callback.message.edit_text(
+        "✏️ <b>Изменение ставки</b>\n\n"
+        "Напишите новую сумму вашей ставки:",
+        parse_mode="HTML"
+    )
+
+    # Keep FSM state (waiting_for_bid) and lot_id
+    # User will enter new amount via process_bid handler
+
+    logger.info(f"📝 User {callback.from_user.id} wants to change bid for lot {lot_id}")
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("stop_participation:"))
+async def stop_participation(callback: CallbackQuery, state: FSMContext):
+    """Handle stop participation button - user wants to cancel bidding"""
+    lot_id = int(callback.data.split(":")[1])
+
+    # Remove user from awaiting_bids
+    if callback.from_user.id in awaiting_bids:
+        del awaiting_bids[callback.from_user.id]
+
+    # Edit message
+    await callback.message.edit_text(
+        "❌ <b>Вы перестали участвовать в аукционе</b>\n\n"
+        "Ставка не принята.",
+        parse_mode="HTML"
+    )
+
+    # Restore main menu
+    from bot import bot
+    from utils import get_user_menu
+    menu = await get_user_menu(callback.from_user.id)
+    await bot.send_message(
+        chat_id=callback.from_user.id,
+        text="Используйте меню ниже для навигации:",
+        reply_markup=menu
+    )
+
+    logger.info(f"❌ User {callback.from_user.id} stopped participating in lot {lot_id}")
     await callback.answer()
 
 

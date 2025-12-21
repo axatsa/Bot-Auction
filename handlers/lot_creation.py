@@ -126,7 +126,7 @@ async def process_description(message: Message, state: FSMContext):
         return
 
     # Validate description length
-    MIN_DESCRIPTION_LENGTH = 10
+    MIN_DESCRIPTION_LENGTH = 1
     MAX_DESCRIPTION_LENGTH = 500
 
     if len(message.text) < MIN_DESCRIPTION_LENGTH:

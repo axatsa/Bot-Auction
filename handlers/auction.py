@@ -57,10 +57,6 @@ async def handle_contact_seller(callback: CallbackQuery, state: FSMContext):
                  f"📦 <b>Товар:</b> {lot['description']}\n"
                  f"💰 <b>Цена:</b> {format_price(lot['start_price'])} тенге\n"
                  f"🏙️ <b>Город:</b> {lot['city']}\n\n"
-                 f"👤 <b>Контакт продавца:</b>\n"
-                 f"Имя: {seller['name']}\n"
-                 f"Username: {seller_username}\n"
-                 f"Телефон: {seller['phone']}\n\n"
                  f"🙏 Оставайтесь на связи, если владелец не свяжется с Вами в течении часа, то скорей всего букет уже продан",
             parse_mode="HTML"
         )

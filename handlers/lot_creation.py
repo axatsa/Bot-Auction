@@ -125,6 +125,7 @@ async def process_description(message: Message, state: FSMContext):
         await state.set_state(LotCreation.waiting_for_photos)
         return
 
+
     # Validate description length
     MIN_DESCRIPTION_LENGTH = 1
     MAX_DESCRIPTION_LENGTH = 500

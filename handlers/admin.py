@@ -838,7 +838,7 @@ async def handle_payment_verification(callback: CallbackQuery, state: FSMContext
                     f"• Неверная сумма оплаты\n"
                     f"• Нечитаемый скриншот\n"
                     f"• Оплата на неверную карту\n\n"
-                    f"Пожалуйста, свяжитесь с администратором для уточнения."
+                    f"Пожалуйста, свяжитесь с администратором для уточнения: {config.ADMIN_USERNAME}"
                 ),
                 parse_mode="HTML",
                 reply_markup=menu

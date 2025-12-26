@@ -1,4 +1,4 @@
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import ReplyKeyboardMarkup, InlineKeyboardMarkup
 from aiogram.utils.keyboard import ReplyKeyboardBuilder, InlineKeyboardBuilder
 
 
@@ -13,7 +13,7 @@ def get_main_menu(is_admin: bool = False) -> ReplyKeyboardMarkup:
     """Main menu keyboard"""
     kb = ReplyKeyboardBuilder()
     kb.button(text="🔥 Добавить товарный аукцион")
-    kb.button(text="💐 Выставить букет")
+    kb.button(text="💐 Выставить букет по фиксированной цене")
     kb.button(text="📋 Текущие аукционы")
     if is_admin:
         kb.button(text="⚙️ Режим администратора")
@@ -63,6 +63,15 @@ def get_moderation_keyboard(lot_id: int) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
+def get_payment_verification_keyboard(lot_id: int) -> InlineKeyboardMarkup:
+    """Keyboard for payment verification and publishing"""
+    kb = InlineKeyboardBuilder()
+    kb.button(text="✅ Опубликовать", callback_data=f"verify_payment:publish:{lot_id}")
+    kb.button(text="❌ Отклонить чек", callback_data=f"verify_payment:reject:{lot_id}")
+    kb.adjust(2)
+    return kb.as_markup()
+
+
 def get_rejection_reasons_keyboard(lot_id: int) -> InlineKeyboardMarkup:
     """Keyboard for selecting rejection reason"""
     kb = InlineKeyboardBuilder()
@@ -104,18 +113,19 @@ def get_buy_keyboard(lot_id: int, bot_username: str = None) -> InlineKeyboardMar
 
     # If bot_username provided, use deep link, otherwise use callback
     if bot_username:
-        kb.button(text="💳 Купить", url=f"https://t.me/{bot_username}?start=buy_{lot_id}")
+        kb.button(text="📞 Связаться с продавцом", url=f"https://t.me/{bot_username}?start=contact_{lot_id}")
     else:
-        kb.button(text="💳 Купить", callback_data=f"buy:{lot_id}")
+        kb.button(text="📞 Связаться с продавцом", callback_data=f"contact_seller:{lot_id}")
 
     return kb.as_markup()
 
 
-def get_bid_confirmation_keyboard(lot_id: int) -> InlineKeyboardMarkup:
-    """Keyboard for confirming bid"""
+def get_bid_confirmation_keyboard(lot_id: int, amount: int) -> InlineKeyboardMarkup:
+    """Keyboard for confirming bid with three options"""
     kb = InlineKeyboardBuilder()
-    kb.button(text="✅ Подтвердить", callback_data=f"confirm_bid:{lot_id}")
-    kb.button(text="❌ Отменить", callback_data=f"cancel_bid:{lot_id}")
+    kb.button(text="✅ Да", callback_data=f"confirm_bid:{lot_id}:{amount}")
+    kb.button(text="✏️ Изменить", callback_data=f"change_bid:{lot_id}")
+    kb.button(text="❌ Перестать участвовать", callback_data=f"stop_participation:{lot_id}")
     kb.adjust(2)
     return kb.as_markup()
 
@@ -183,4 +193,37 @@ def get_delete_confirmation_keyboard(lot_id: int) -> InlineKeyboardMarkup:
     kb.button(text="🗑️ Да, удалить", callback_data=f"confirm_delete:{lot_id}")
     kb.button(text="◀️ Отмена", callback_data=f"cancel_delete:{lot_id}")
     kb.adjust(2)
+    return kb.as_markup()
+
+
+def get_terms_acceptance_keyboard(lot_id: int) -> InlineKeyboardMarkup:
+    """Keyboard for accepting terms of use"""
+    kb = InlineKeyboardBuilder()
+    kb.button(text="✅ Я согласен с правилами", callback_data=f"accept_terms:{lot_id}")
+    kb.button(text="📋 Читать правила", url="https://telegra.ph/Re-Bloom---Term-of-Use-12-06")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def get_outbid_keyboard(lot_id: int) -> InlineKeyboardMarkup:
+    """Keyboard for outbid notification with 'Suggest new price' button"""
+    kb = InlineKeyboardBuilder()
+    kb.button(text="💰 Предложить новую цену", callback_data=f"participate:{lot_id}")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def get_mark_sold_keyboard(lot_id: int) -> InlineKeyboardMarkup:
+    """Keyboard for seller to mark lot as sold"""
+    kb = InlineKeyboardBuilder()
+    kb.button(text="✅ Продано", callback_data=f"mark_sold:{lot_id}")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def get_admin_lot_actions_keyboard(lot_id: int) -> InlineKeyboardMarkup:
+    """Keyboard for admin actions on a lot"""
+    kb = InlineKeyboardBuilder()
+    kb.button(text="✅ Пометить как продано", callback_data=f"admin_mark_sold:{lot_id}")
+    kb.adjust(1)
     return kb.as_markup()

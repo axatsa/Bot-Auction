@@ -3,9 +3,9 @@ from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 
 from database import db
-from keyboards import get_draft_edit_keyboard, get_draft_preview_keyboard, get_main_menu, get_cancel_keyboard, get_moderation_keyboard, get_size_keyboard, get_wear_keyboard, get_delete_confirmation_keyboard, get_city_keyboard
+from keyboards import get_draft_edit_keyboard, get_draft_preview_keyboard, get_main_menu, get_cancel_keyboard, get_moderation_keyboard, get_size_keyboard, get_wear_keyboard, get_delete_confirmation_keyboard, get_city_keyboard, get_participate_keyboard, get_buy_keyboard
 from states import LotCreation
-from utils import format_lot_message, get_photos_list, photos_to_string, create_media_group, get_user_menu
+from utils import format_lot_message, get_photos_list, photos_to_string, create_media_group, get_user_menu, format_price
 import config
 
 router = Router()
@@ -27,6 +27,15 @@ async def process_photos(message: Message, state: FSMContext):
     # Add new photo and stay on this step without confirmations
     photos.append(message.photo[-1].file_id)
     await state.update_data(photos=photos)
+
+    # Send confirmation with "Done" button after first photo
+    if len(photos) == 1:
+        await message.answer(
+            f"✅ Фото загружено: {len(photos)}/10\n\n"
+            "Отправьте еще фото или нажмите кнопку 'Готово' для продолжения.",
+            reply_markup=get_photos_keyboard()
+        )
+
     await state.set_state(LotCreation.waiting_for_photos)
 
 
@@ -116,8 +125,9 @@ async def process_description(message: Message, state: FSMContext):
         await state.set_state(LotCreation.waiting_for_photos)
         return
 
+
     # Validate description length
-    MIN_DESCRIPTION_LENGTH = 10
+    MIN_DESCRIPTION_LENGTH = 1
     MAX_DESCRIPTION_LENGTH = 500
 
     if len(message.text) < MIN_DESCRIPTION_LENGTH:
@@ -287,13 +297,13 @@ async def process_wear(message: Message, state: FSMContext):
     if lot_type == 'auction':
         price_text = (
             "💰 <b>Шаг 5/6 - Стартовая цена</b>\n\n"
-            "Укажите стартовую цену для аукциона (в тенгеах)\n\n"
+            "Укажите стартовую цену для аукциона (в тенге)\n\n"
             "💡 <b>Совет:</b> Оптимальная стартовая цена - 60-70% от желаемой"
         )
     else:
         price_text = (
             "💰 <b>Шаг 5/6 - Цена</b>\n\n"
-            "Укажите цену букета (в тенгеах)\n\n"
+            "Укажите цену букета (в тенге)\n\n"
             "💡 <b>Совет:</b> Указывайте справедливую цену за букет"
         )
 
@@ -405,7 +415,8 @@ async def show_lot_draft(message: Message, lot_id: int, state: FSMContext):
         await message.answer_media_group(media)
         await message.answer(
             "📋 <b>Выберите действие:</b>\n\n"
-            "Вы можете отредактировать лот или опубликовать его",
+            "Вы можете отредактировать лот или опубликовать его.\n"
+            "Что бы опубликовать его вам придется заплатить за использоваение наших услуг.",
             parse_mode="HTML",
             reply_markup=get_draft_preview_keyboard(lot_id)
         )
@@ -438,40 +449,33 @@ async def handle_draft_edit(callback: CallbackQuery, state: FSMContext):
         return
 
     elif action == "publish":
-        # Send to moderation
-        await db.update_lot_status(lot_id, 'pending')
+        # Send directly to moderation without payment
+        from bot import bot
 
+        # Notify user that lot is sent to moderation
         menu = await get_user_menu(callback.from_user.id)
         await callback.message.answer(
-            "🎉 <b>Готово!</b>\n\n"
-            "Ваш лот отправлен на модерацию администратору\n\n"
-            "⏳ Обычно проверка занимает 5-15 минут\n\n"
-            "Мы уведомим вас когда лот будет одобрен и опубликован",
+            "✅ <b>Ваш лот отправлен на модерацию!</b>\n\n"
+            "После проверки модератором:\n"
+            "• ✅ Если одобрен - вы получите запрос на оплату 500 тенге\n"
+            "• ❌ Если отклонен - вы получите причину отклонения\n\n"
+            "⏳ Ожидайте уведомления...",
             parse_mode="HTML",
             reply_markup=menu
         )
 
         # Notify admins
+        from keyboards import get_moderation_keyboard
+
         lot = await db.get_lot(lot_id)
-        owner = await db.get_user(lot['owner_id'])
-
-        # Format username safely
-        owner_username = f"@{owner['username']}" if owner.get('username') else "нет username"
-
-        # Get all admin IDs from database
         admin_ids = await db.get_all_admin_ids()
 
         for admin_id in admin_ids:
             try:
-                caption = f"🔔 <b>Новый лот на модерацию</b>\n\n"
-                caption += f"От: {owner['name']} ({owner_username})\n"
-                caption += f"ID лота: {lot_id}\n\n"
-                caption += format_lot_message(lot)
-
                 photos = get_photos_list(lot['photos'])
+                caption = f"🔔 <b>Новый лот на модерации</b>\n\n" + format_lot_message(lot)
 
                 if len(photos) == 1:
-                    from bot import bot
                     await bot.send_photo(
                         chat_id=admin_id,
                         photo=photos[0],
@@ -480,16 +484,15 @@ async def handle_draft_edit(callback: CallbackQuery, state: FSMContext):
                         reply_markup=get_moderation_keyboard(lot_id)
                     )
                 else:
-                    from bot import bot
                     media = create_media_group(photos, caption)
                     await bot.send_media_group(chat_id=admin_id, media=media)
                     await bot.send_message(
                         chat_id=admin_id,
-                        text="Одобрить или отклонить?",
+                        text="👇 Выберите действие:",
                         reply_markup=get_moderation_keyboard(lot_id)
                     )
-            except Exception as e:
-                print(f"Failed to notify admin {admin_id}: {e}")
+            except Exception:
+                pass
 
         await state.clear()
 
@@ -737,6 +740,82 @@ async def edit_wear(message: Message, state: FSMContext):
     await state.set_state(LotCreation.editing_draft)
 
 
+# Payment screenshot handler - sends to admin for verification
+@router.message(F.photo)
+async def process_payment_screenshot(message: Message, state: FSMContext):
+    """Process payment screenshot and send to admin for verification"""
+    # Check if user has an approved lot waiting for payment
+    lots = await db.get_user_lots_by_status(message.from_user.id, 'approved_waiting_payment')
+
+    if not lots:
+        # Not a payment screenshot, ignore
+        return
+
+    lot = lots[0]  # Get the first approved lot waiting for payment
+    lot_id = lot['id']
+
+    # Get photo file_id
+    photo_file_id = message.photo[-1].file_id
+
+    # Save screenshot to database
+    await db.update_lot_field(lot_id, 'payment_screenshot', photo_file_id)
+
+    # Update lot status to pending payment verification
+    await db.update_lot_status(lot_id, 'pending_payment_verification')
+
+    # Notify user
+    menu = await get_user_menu(message.from_user.id)
+    await message.answer(
+        "✅ <b>Чек получен!</b>\n\n"
+        "Ваш чек отправлен на проверку администратору\n\n"
+        "⏳ После проверки оплаты ваш лот будет опубликован\n\n"
+        "Обычно проверка занимает 5-15 минут",
+        parse_mode="HTML",
+        reply_markup=menu
+    )
+
+    # Notify admins - send lot + payment screenshot
+    from bot import bot
+
+    admin_ids = await db.get_all_admin_ids()
+
+    for admin_id in admin_ids:
+        try:
+            # Send lot photos
+            photos = get_photos_list(lot['photos'])
+            caption = f"💳 <b>Проверка оплаты</b>\n\n" + format_lot_message(lot)
+
+            if len(photos) == 1:
+                await bot.send_photo(
+                    chat_id=admin_id,
+                    photo=photos[0],
+                    caption=caption,
+                    parse_mode="HTML"
+                )
+            else:
+                media = create_media_group(photos, caption)
+                await bot.send_media_group(chat_id=admin_id, media=media)
+
+            # Send payment screenshot
+            await bot.send_photo(
+                chat_id=admin_id,
+                photo=photo_file_id,
+                caption=f"💳 <b>Скриншот оплаты</b>\n\n📦 Лот #{lot_id}",
+                parse_mode="HTML"
+            )
+
+            # Send publish/reject buttons
+            from keyboards import get_payment_verification_keyboard
+            await bot.send_message(
+                chat_id=admin_id,
+                text="<b>Опубликовать лот или отклонить чек?</b>",
+                parse_mode="HTML",
+                reply_markup=get_payment_verification_keyboard(lot_id)
+            )
+        except Exception as e:
+            print(f"Failed to notify admin {admin_id}: {e}")
+
+
 @router.callback_query(F.data.startswith("confirm_delete:"))
 async def confirm_delete_lot(callback: CallbackQuery, state: FSMContext):
     """Confirm lot deletion"""
@@ -773,3 +852,6 @@ async def cancel_delete_lot(callback: CallbackQuery, state: FSMContext):
     # Show draft again
     await show_lot_draft(callback.message, lot_id, state)
     await state.set_state(LotCreation.editing_draft)
+
+
+# Handler removed - now payment comes BEFORE moderation, handled above

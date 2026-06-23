@@ -2,9 +2,10 @@ from aiogram import Router, F
 from aiogram.types import CallbackQuery, Message
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
+import aiosqlite
 
 from database import db
-from keyboards import get_participate_keyboard, get_buy_keyboard, get_rejection_reasons_keyboard, get_confirm_rejection_keyboard, get_moderation_keyboard, get_admin_menu, get_main_menu
+from keyboards import get_participate_keyboard, get_buy_keyboard, get_rejection_reasons_keyboard, get_confirm_rejection_keyboard, get_moderation_keyboard, get_admin_menu, get_main_menu, get_admin_lot_actions_keyboard
 from utils import is_admin, format_lot_message, get_photos_list, format_auction_status, format_price
 from states import AdminAuth, AdminModeration
 import config
@@ -46,6 +47,10 @@ async def switch_to_admin_mode(message: Message):
 @router.message(Command("admin"))
 async def cmd_admin(message: Message, state: FSMContext):
     """Handle /admin command"""
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info(f"🔧 /admin command received from user {message.from_user.id}")
+
     # Check if already admin
     if await is_admin(message.from_user.id):
         await message.answer(
@@ -155,6 +160,74 @@ async def show_history(message: Message):
     )
 
 
+@router.callback_query(F.data.startswith("admin_mark_sold:"))
+async def admin_mark_sold(callback: CallbackQuery):
+    """Admin marks lot as sold"""
+    if not await is_admin(callback.from_user.id):
+        await callback.answer("У вас нет прав администратора!", show_alert=True)
+        return
+
+    lot_id = int(callback.data.split(":")[1])
+    lot = await db.get_lot(lot_id)
+
+    if not lot:
+        await callback.answer("Лот не найден!", show_alert=True)
+        return
+
+    # Check if already sold
+    if lot['status'] == 'finished':
+        await callback.answer("Этот лот уже помечен как проданный!", show_alert=True)
+        return
+
+    # Mark as sold
+    await db.update_lot_status(lot_id, 'finished')
+
+    # Update channel message to show "SOLD"
+    if lot.get('channel_message_id'):
+        from bot import bot
+        from utils import format_sold_message, get_photos_list
+        import logging
+
+        logger = logging.getLogger(__name__)
+
+        try:
+            # Format sold message
+            sold_text = format_sold_message(lot, lot['start_price'])
+
+            # Get photos to determine if it's a single photo or media group
+            photos = get_photos_list(lot['photos'])
+
+            # Edit message (remove keyboard to prevent further interaction)
+            if len(photos) == 1:
+                # Single photo - edit caption
+                await bot.edit_message_caption(
+                    chat_id=config.CHANNEL_ID,
+                    message_id=lot['channel_message_id'],
+                    caption=sold_text,
+                    parse_mode="HTML",
+                    reply_markup=None
+                )
+            else:
+                # Media group - edit button message to show sold
+                if lot.get('channel_button_message_id'):
+                    await bot.edit_message_text(
+                        chat_id=config.CHANNEL_ID,
+                        message_id=lot['channel_button_message_id'],
+                        text=sold_text,
+                        parse_mode="HTML",
+                        reply_markup=None
+                    )
+        except Exception as e:
+            logger.error(f"Failed to update channel message: {e}")
+
+    await callback.message.edit_text(
+        f"✅ Лот #{lot_id} помечен как проданный!\n\n"
+        f"Сообщение в канале обновлено.",
+        parse_mode="HTML"
+    )
+    await callback.answer("✅ Лот помечен как проданный!")
+
+
 @router.callback_query(F.data.startswith("history:"))
 async def show_history_lots(callback: CallbackQuery):
     """Show lots history by status"""
@@ -228,25 +301,34 @@ async def show_history_lots(callback: CallbackQuery):
 
         # Show first photo if available
         photos = get_photos_list(lot['photos'])
+
+        # Add admin action button for active regular (fixed price) lots
+        keyboard = None
+        if lot['status'] in ['approved', 'active'] and lot.get('lot_type') == 'regular':
+            keyboard = get_admin_lot_actions_keyboard(lot['id'])
+
         if photos:
             try:
                 await bot.send_photo(
                     chat_id=callback.from_user.id,
                     photo=photos[0],
                     caption=text,
-                    parse_mode="HTML"
+                    parse_mode="HTML",
+                    reply_markup=keyboard
                 )
             except Exception:
                 await bot.send_message(
                     chat_id=callback.from_user.id,
                     text=text,
-                    parse_mode="HTML"
+                    parse_mode="HTML",
+                    reply_markup=keyboard
                 )
         else:
             await bot.send_message(
                 chat_id=callback.from_user.id,
                 text=text,
-                parse_mode="HTML"
+                parse_mode="HTML",
+                reply_markup=keyboard
             )
 
     await callback.answer()
@@ -291,26 +373,35 @@ async def show_moderation(message: Message):
 
         photos = get_photos_list(lot['photos'])
 
+        # Send lot photos
         if len(photos) == 1:
             await bot.send_photo(
                 chat_id=message.from_user.id,
                 photo=photos[0],
                 caption=caption,
-                parse_mode="HTML",
-                reply_markup=get_moderation_keyboard(lot['id'])
+                parse_mode="HTML"
             )
         else:
             # Multiple photos - send media group
             media = create_media_group(photos, caption)
             await bot.send_media_group(chat_id=message.from_user.id, media=media)
 
-            # Send buttons separately
-            await bot.send_message(
+        # Send payment screenshot if exists
+        if lot.get('payment_screenshot'):
+            await bot.send_photo(
                 chat_id=message.from_user.id,
-                text="<b>Одобрить или отклонить?</b>",
-                parse_mode="HTML",
-                reply_markup=get_moderation_keyboard(lot['id'])
+                photo=lot['payment_screenshot'],
+                caption=f"💳 <b>Скриншот оплаты</b>\n\n📦 Лот #{lot['id']}",
+                parse_mode="HTML"
             )
+
+        # Send moderation buttons
+        await bot.send_message(
+            chat_id=message.from_user.id,
+            text="<b>Одобрить или отклонить?</b>",
+            parse_mode="HTML",
+            reply_markup=get_moderation_keyboard(lot['id'])
+        )
 
 
 @router.callback_query(F.data.startswith("moderate:"))
@@ -331,109 +422,51 @@ async def handle_moderation(callback: CallbackQuery):
         return
 
     if action == "approve":
-        # Atomically approve only if still pending to avoid double publishing
-        approved_now = await db.approve_lot_if_pending(lot_id)
-        if not approved_now:
-            await callback.answer("Лот уже был обработан другим администратором.", show_alert=True)
-            return
+        # Update status to approved_waiting_payment
+        async with aiosqlite.connect(db.db_path) as conn:
+            cursor = await conn.execute(
+                "UPDATE lots SET status = 'approved_waiting_payment' WHERE id = ? AND status = 'pending'",
+                (lot_id,)
+            )
+            await conn.commit()
+            if cursor.rowcount == 0:
+                await callback.answer("Лот уже был обработан другим администратором.", show_alert=True)
+                return
 
-        # Publish to channel
+        # Delete the moderation message
+        try:
+            await callback.message.delete()
+        except Exception:
+            await callback.message.edit_text(
+                f"✅ Лот {lot_id} одобрен! Пользователю отправлен запрос на оплату."
+            )
+
+        # Send payment request to owner
         from bot import bot
 
-        # Add lot type indicator to caption
-        lot_type_label = "🔥 Аукцион" if lot.get('lot_type') == 'auction' else "💐 Букет на продажу"
-        caption = f"<b>{lot_type_label}</b>\n\n"
-        caption += format_lot_message(lot)
-
-        photos = get_photos_list(lot['photos'])
-        # For single-photo auction, we can include dynamic status in caption (it will be updated later)
-        if lot.get('lot_type') == 'auction' and len(photos) == 1:
-            caption += format_auction_status(lot)
-
-        # Choose keyboard based on lot type
-        # Import bot_username for deep linking
-        from bot import bot_username
-
-        if lot.get('lot_type') == 'auction':
-            keyboard = get_participate_keyboard(lot_id, bot_username)
-            button_text = "👇 Нажмите чтобы участвовать в аукционе"
-        else:
-            keyboard = get_buy_keyboard(lot_id, bot_username)
-            button_text = "👇 Нажмите чтобы купить"
+        payment_text = (
+            f"🎉 <b>Отличная новость!</b>\n\n"
+            f"Ваш лот одобрен модератором!\n\n"
+            f"📦 <b>Лот:</b> {lot['description']}\n\n"
+            f"💳 <b>Оплата публикации</b>\n\n"
+            f"Для публикации товара необходимо оплатить {format_price(config.PAYMENT_AMOUNT)} тенге за сервис Rebloom\n\n"
+            f"<b>Номер карты:</b>\n<code>{config.PAYMENT_CARD_NUMBER}</code>\n\n"
+            f"<b>Номер телефона:</b>\n<code>+{config.PAYMENT_PHONE_NUMBER}</code>\n\n"
+            f"📸 После оплаты отправьте скриншот чека в этот чат\n\n"
+            f"💡 Нажмите на номер карты для копирования"
+        )
 
         try:
-            if len(photos) == 1:
-                # Single photo
-                sent_message = await bot.send_photo(
-                    chat_id=config.CHANNEL_ID,
-                    photo=photos[0],
-                    caption=caption,
-                    parse_mode="HTML",
-                    reply_markup=keyboard
-                )
-                # Save channel message ID
-                await db.update_lot_field(lot_id, 'channel_message_id', sent_message.message_id)
-            else:
-                # Multiple photos - send as media group
-                from utils import create_media_group
-
-                media = create_media_group(photos, caption)
-                sent_messages = await bot.send_media_group(
-                    chat_id=config.CHANNEL_ID,
-                    media=media
-                )
-
-                # Save first message ID for tracking
-                await db.update_lot_field(lot_id, 'channel_message_id', sent_messages[0].message_id)
-
-                # Send button in separate message
-                await bot.send_message(
-                    chat_id=config.CHANNEL_ID,
-                    text=button_text,
-                    reply_markup=keyboard
-                )
-
-            # Delete the moderation message
-            try:
-                await callback.message.delete()
-            except Exception:
-                # If can't delete, just edit the message
-                await callback.message.edit_text(
-                    f"✅ Лот {lot_id} одобрен и опубликован в канале!"
-                )
-
-            # Notify owner
-            owner = await db.get_user(lot['owner_id'])
-            try:
-                if lot.get('lot_type') == 'auction':
-                    notification_text = (
-                        f"🎉 <b>Отличная новость!</b>\n\n"
-                        f"Ваш лот одобрен и опубликован в канале\n\n"
-                        f"📦 <b>Лот:</b> {lot['description']}\n"
-                        f"💰 <b>Стартовая цена:</b> {format_price(lot['start_price'])} тенге\n"
-                        f"⏰ <b>Длительность:</b> 10 минут\n\n"
-                        f"Аукцион начнётся когда кто-то сделает первую ставку"
-                    )
-                else:
-                    notification_text = (
-                        f"🎉 <b>Отличная новость!</b>\n\n"
-                        f"Ваш букет одобрен и опубликован в канале\n\n"
-                        f"📦 <b>Товар:</b> {lot['description']}\n"
-                        f"💰 <b>Цена:</b> {format_price(lot['start_price'])} тенге\n\n"
-                        f"Ожидайте покупателя!"
-                    )
-
-                await bot.send_message(
-                    chat_id=lot['owner_id'],
-                    text=notification_text,
-                    parse_mode="HTML"
-                )
-            except Exception:
-                pass
-
+            from utils import get_user_menu
+            menu = await get_user_menu(lot['owner_id'])
+            await bot.send_message(
+                chat_id=lot['owner_id'],
+                text=payment_text,
+                parse_mode="HTML",
+                reply_markup=menu
+            )
         except Exception as e:
-            await callback.answer(f"Ошибка публикации в канал: {e}", show_alert=True)
-            return
+            print(f"Failed to send payment request to user {lot['owner_id']}: {e}")
 
     elif action == "reject":
         # Ask for confirmation before rejecting
@@ -567,18 +600,30 @@ async def reject_lot_with_reason(lot_id: int, reason: str, callback: CallbackQue
         await state.clear()
         return
 
-    # Update lot status
-    await db.update_lot_status(lot_id, 'rejected')
+    # Atomically update lot status to rejected only if currently pending
+    async with aiosqlite.connect(db.db_path) as conn:
+        cursor = await conn.execute(
+            "UPDATE lots SET status = 'rejected' WHERE id = ? AND status = 'pending'",
+            (lot_id,)
+        )
+        await conn.commit()
+        if cursor.rowcount == 0:
+            await callback.message.edit_text("❌ Лот уже был обработан другим администратором.")
+            await state.clear()
+            return
 
     # Notify owner
     try:
+        from utils import get_user_menu
+        menu = await get_user_menu(lot['owner_id'])
         await bot.send_message(
             chat_id=lot['owner_id'],
             text=f"❌ <b>Ваш лот был отклонён</b>\n\n"
                  f"📦 Лот: {lot['description']}\n\n"
                  f"<b>Причина:</b>\n{reason}\n\n"
                  f"💡 Исправьте замечания и создайте лот заново.",
-            parse_mode="HTML"
+            parse_mode="HTML",
+            reply_markup=menu
         )
     except Exception as e:
         print(f"Failed to notify owner: {e}")
@@ -619,3 +664,186 @@ async def process_custom_rejection_reason(message: Message, state: FSMContext):
             self.message = msg
 
     await reject_lot_with_reason(lot_id, custom_reason, DummyCallback(message), state)
+
+
+@router.callback_query(F.data.startswith("verify_payment:"))
+async def handle_payment_verification(callback: CallbackQuery, state: FSMContext):
+    """Handle payment verification - publish or reject"""
+    if not await is_admin(callback.from_user.id):
+        await callback.answer("❌ У вас нет прав администратора!", show_alert=True)
+        return
+
+    parts = callback.data.split(":")
+    action = parts[1]
+    lot_id = int(parts[2])
+
+    lot = await db.get_lot(lot_id)
+
+    if not lot:
+        await callback.answer("Лот не найден!", show_alert=True)
+        return
+
+    if action == "publish":
+        # Atomically update status to approved only if currently pending_payment_verification
+        async with aiosqlite.connect(db.db_path) as conn:
+            cursor = await conn.execute(
+                "UPDATE lots SET status = 'approved' WHERE id = ? AND status = 'pending_payment_verification'",
+                (lot_id,)
+            )
+            await conn.commit()
+            if cursor.rowcount == 0:
+                await callback.answer("Лот уже был опубликован другим администратором.", show_alert=True)
+                return
+
+        # Publish to channel
+        from bot import bot, bot_username
+
+        # Add lot type indicator to caption
+        lot_type_label = "🔥 Аукцион" if lot.get('lot_type') == 'auction' else "💐 Букет на продажу"
+        caption = f"<b>{lot_type_label}</b>\n\n"
+        caption += format_lot_message(lot, include_terms_link=True)
+
+        photos = get_photos_list(lot['photos'])
+        # For single-photo auction, we can include dynamic status in caption (it will be updated later)
+        if lot.get('lot_type') == 'auction' and len(photos) == 1:
+            caption += format_auction_status(lot)
+
+        # Choose keyboard based on lot type
+        if lot.get('lot_type') == 'auction':
+            keyboard = get_participate_keyboard(lot_id, bot_username)
+            button_text = "👇 Нажмите чтобы участвовать в аукционе"
+        else:
+            keyboard = get_buy_keyboard(lot_id, bot_username)
+            button_text = "👇 Нажмите чтобы связаться с продавцом"
+
+        try:
+            if len(photos) == 1:
+                # Single photo
+                sent_message = await bot.send_photo(
+                    chat_id=config.CHANNEL_ID,
+                    photo=photos[0],
+                    caption=caption,
+                    parse_mode="HTML",
+                    reply_markup=keyboard
+                )
+                # Save channel message ID
+                await db.update_lot_field(lot_id, 'channel_message_id', sent_message.message_id)
+            else:
+                # Multiple photos - send as media group
+                from utils import create_media_group
+
+                media = create_media_group(photos, caption)
+                sent_messages = await bot.send_media_group(
+                    chat_id=config.CHANNEL_ID,
+                    media=media
+                )
+
+                # Save first message ID for tracking
+                await db.update_lot_field(lot_id, 'channel_message_id', sent_messages[0].message_id)
+
+                # Send button in separate message (with auction status for auctions)
+                button_message_text = button_text
+                if lot.get('lot_type') == 'auction':
+                    # Include auction status in button message for media groups
+                    button_message_text += "\n\n" + format_auction_status(lot)
+
+                button_message = await bot.send_message(
+                    chat_id=config.CHANNEL_ID,
+                    text=button_message_text,
+                    reply_markup=keyboard,
+                    parse_mode="HTML",
+                    reply_to_message_id=sent_messages[0].message_id
+                )
+
+                # Save button message ID for updating later
+                await db.update_lot_field(lot_id, 'channel_button_message_id', button_message.message_id)
+
+            # Delete the verification message
+            try:
+                await callback.message.delete()
+            except Exception:
+                await callback.message.edit_text(
+                    f"✅ Лот {lot_id} опубликован в канале!"
+                )
+
+            # Notify owner
+            try:
+                from utils import get_user_menu
+                menu = await get_user_menu(lot['owner_id'])
+
+                if lot.get('lot_type') == 'auction':
+                    notification_text = (
+                        f"🎉 <b>Отличная новость!</b>\n\n"
+                        f"Ваш лот опубликован в канале!\n\n"
+                        f"📦 <b>Лот:</b> {lot['description']}\n"
+                        f"💰 <b>Стартовая цена:</b> {format_price(lot['start_price'])} тенге\n"
+                        f"⏰ <b>Длительность:</b> 2 часа\n\n"
+                        f"Аукцион начнётся когда кто-то сделает первую ставку"
+                    )
+                else:
+                    notification_text = (
+                        f"🎉 <b>Отличная новость!</b>\n\n"
+                        f"Ваш букет опубликован в канале!\n\n"
+                        f"📦 <b>Товар:</b> {lot['description']}\n"
+                        f"💰 <b>Цена:</b> {format_price(lot['start_price'])} тенге\n\n"
+                        f"Ожидайте покупателя!"
+                    )
+
+                await bot.send_message(
+                    chat_id=lot['owner_id'],
+                    text=notification_text,
+                    parse_mode="HTML",
+                    reply_markup=menu
+                )
+            except Exception:
+                pass
+
+        except Exception as e:
+            await callback.answer(f"Ошибка публикации в канал: {e}", show_alert=True)
+            return
+
+    elif action == "reject":
+        # Atomically update status to payment_rejected only if currently pending_payment_verification
+        async with aiosqlite.connect(db.db_path) as conn:
+            cursor = await conn.execute(
+                "UPDATE lots SET status = 'payment_rejected' WHERE id = ? AND status = 'pending_payment_verification'",
+                (lot_id,)
+            )
+            await conn.commit()
+            if cursor.rowcount == 0:
+                await callback.answer("Чек уже был обработан другим администратором.", show_alert=True)
+                return
+
+        # Reject payment - notify user
+        from bot import bot
+
+        try:
+            await callback.message.delete()
+        except Exception:
+            await callback.message.edit_text(
+                f"❌ Чек отклонён для лота {lot_id}"
+            )
+
+        # Notify owner
+        try:
+            from utils import get_user_menu
+            menu = await get_user_menu(lot['owner_id'])
+            await bot.send_message(
+                chat_id=lot['owner_id'],
+                text=(
+                    f"❌ <b>Оплата не подтверждена</b>\n\n"
+                    f"Ваш чек оплаты не прошёл проверку.\n\n"
+                    f"📦 <b>Лот:</b> {lot['description']}\n\n"
+                    f"Возможные причины:\n"
+                    f"• Неверная сумма оплаты\n"
+                    f"• Нечитаемый скриншот\n"
+                    f"• Оплата на неверную карту\n\n"
+                    f"Пожалуйста, свяжитесь с администратором для уточнения: {config.ADMIN_USERNAME}"
+                ),
+                parse_mode="HTML",
+                reply_markup=menu
+            )
+        except Exception:
+            pass
+
+    await callback.answer()

@@ -22,7 +22,7 @@ async def get_user_menu(user_id: int):
     return get_main_menu(is_admin=user_is_admin)
 
 
-def format_lot_message(lot: Dict[str, Any], include_price: bool = True) -> str:
+def format_lot_message(lot: Dict[str, Any], include_price: bool = True, include_terms_link: bool = False) -> str:
     """Format lot information for display"""
     text = f"<b>Описание:</b> {lot['description']}\n"
     text += f"<b>Город:</b> {lot['city']}\n"
@@ -30,26 +30,38 @@ def format_lot_message(lot: Dict[str, Any], include_price: bool = True) -> str:
     text += f"<b>Свежесть:</b> {lot['wear']}\n"
 
     if include_price:
-        if lot.get('current_price') and lot['current_price'] > lot['start_price']:
-            text += f"<b>Стартовая цена:</b> {format_price(lot['start_price'])} тенге\n"
-            text += f"<b>Текущая ставка:</b> {format_price(lot['current_price'])} тенге\n"
+        # Different price label for auction vs regular sale
+        if lot.get('lot_type') == 'auction':
+            if lot.get('current_price') and lot['current_price'] > lot['start_price']:
+                text += f"<b>Стартовая цена:</b> {format_price(lot['start_price'])} тенге\n"
+                text += f"<b>Текущая ставка:</b> {format_price(lot['current_price'])} тенге\n"
+            else:
+                text += f"<b>Стартовая цена:</b> {format_price(lot['start_price'])} тенге\n"
         else:
-            text += f"<b>Стартовая цена:</b> {format_price(lot['start_price'])} тенге\n"
+            # For regular sale (fixed price)
+            text += f"<b>Цена:</b> {format_price(lot['start_price'])} тенге\n"
+            text += f"\nДанный букет продается по фиксированной цене, для связи с продавцом используйте 👇\n"
 
     return text
 
 
 def format_auction_status(lot: Dict[str, Any]) -> str:
     """Format auction status text"""
+    status_text = ""
+
+    # Show current bid if exists
+    if lot.get('current_price') and lot['current_price'] > lot['start_price']:
+        status_text += f"\n🔥 <b>Топовая ставка:</b> {format_price(lot['current_price'])} тенге"
+
     if not lot.get('auction_started'):
-        return "\n<b>Статус:</b> До начала аукциона"
+        return status_text + "\n<b>Статус:</b> До начала аукциона"
 
     if lot['end_time']:
         end_time = datetime.fromisoformat(lot['end_time'])
         now = datetime.now()
 
         if now >= end_time:
-            return "\n<b>Статус:</b> Завершено"
+            return status_text + "\n<b>Статус:</b> Завершено"
 
         remaining = end_time - now
         hours = remaining.seconds // 3600
@@ -57,12 +69,12 @@ def format_auction_status(lot: Dict[str, Any]) -> str:
 
         if hours > 0:
             if minutes > 0:
-                return f"\n<b>До завершения:</b> {hours} ч {minutes} мин"
-            return f"\n<b>До завершения:</b> {hours} ч"
+                return status_text + f"\n<b>До завершения:</b> {hours} ч {minutes} мин"
+            return status_text + f"\n<b>До завершения:</b> {hours} ч"
         else:
-            return f"\n<b>До завершения:</b> {minutes} мин"
+            return status_text + f"\n<b>До завершения:</b> {minutes} мин"
 
-    return ""
+    return status_text
 
 
 def format_sold_message(lot: Dict[str, Any], final_price: float = None) -> str:
@@ -129,7 +141,7 @@ def calculate_end_time() -> datetime:
 
 def validate_bid(amount: float, start_price: float, current_price: float = None) -> tuple[bool, str]:
     """Validate bid amount"""
-    MIN_BID_STEP = 1000  # Минимальный шаг ставки
+    MIN_BID_STEP = 500  # Минимальный шаг ставки
 
     # Определяем минимальную требуемую ставку
     if current_price:

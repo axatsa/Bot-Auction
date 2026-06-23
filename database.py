@@ -53,6 +53,8 @@ class Database:
                     end_time TEXT,
                     status TEXT DEFAULT 'pending',
                     channel_message_id INTEGER,
+                    channel_button_message_id INTEGER,
+                    payment_screenshot TEXT,
                     created_at TEXT NOT NULL,
                     FOREIGN KEY (owner_id) REFERENCES users(telegram_id),
                     FOREIGN KEY (leader_id) REFERENCES users(telegram_id)
@@ -71,6 +73,30 @@ class Database:
                     FOREIGN KEY (user_id) REFERENCES users(telegram_id)
                 )
             ''')
+
+            # Migration: Add channel_button_message_id if it doesn't exist
+            try:
+                await db.execute('ALTER TABLE lots ADD COLUMN channel_button_message_id INTEGER')
+                await db.commit()
+            except aiosqlite.OperationalError:
+                # Column already exists
+                pass
+
+            # Migration: Add payment_screenshot if it doesn't exist
+            try:
+                await db.execute('ALTER TABLE lots ADD COLUMN payment_screenshot TEXT')
+                await db.commit()
+            except aiosqlite.OperationalError:
+                # Column already exists
+                pass
+
+            # Migration: Add terms_accepted to users if it doesn't exist
+            try:
+                await db.execute('ALTER TABLE users ADD COLUMN terms_accepted INTEGER DEFAULT 0')
+                await db.commit()
+            except aiosqlite.OperationalError:
+                # Column already exists
+                pass
 
             await db.commit()
 
@@ -100,6 +126,21 @@ class Database:
         """Check if user is registered"""
         user = await self.get_user(telegram_id)
         return user is not None
+
+    async def has_accepted_terms(self, telegram_id: int) -> bool:
+        """Check if user has accepted terms of use"""
+        user = await self.get_user(telegram_id)
+        return user and user.get('terms_accepted', 0) == 1
+
+    async def accept_terms(self, telegram_id: int) -> bool:
+        """Mark user as having accepted terms of use"""
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                'UPDATE users SET terms_accepted = 1 WHERE telegram_id = ?',
+                (telegram_id,)
+            )
+            await db.commit()
+            return True
 
     # Lot methods
     async def create_lot(self, owner_id: int, photos: str, description: str,
@@ -226,6 +267,17 @@ class Database:
             ) as cursor:
                 rows = await cursor.fetchall()
                 return [row[0] for row in rows]
+
+    async def get_user_lots_by_status(self, user_id: int, status: str) -> List[Dict[str, Any]]:
+        """Get user's lots by status"""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                'SELECT * FROM lots WHERE owner_id = ? AND status = ? ORDER BY created_at DESC',
+                (user_id, status)
+            ) as cursor:
+                rows = await cursor.fetchall()
+                return [dict(row) for row in rows]
 
     async def delete_lot(self, lot_id: int) -> bool:
         """Delete lot and its bids"""

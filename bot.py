@@ -81,16 +81,22 @@ async def main():
     # Register handlers
     from handlers import registration, menu, lot_creation, admin, auction
 
-    # IMPORTANT: Register registration router FIRST to handle commands like /start
+    # IMPORTANT: Router order matters! Register from most specific to most general
+
+    # 1. Commands and registration (highest priority)
     dp.include_router(registration.router)
 
-    # Then register state-based routers to handle FSM states
-    dp.include_router(lot_creation.router)
-    dp.include_router(auction.router)
-
-    # Then register general routers
+    # 2. Admin commands and controls
     dp.include_router(admin.router)
+
+    # 3. State-based handlers for lot creation (FSM states have high priority)
+    dp.include_router(lot_creation.router)
+
+    # 4. Menu buttons (specific text matches like "💐 Выставить букет")
     dp.include_router(menu.router)
+
+    # 5. Auction handlers with awaiting_bids check (must be LAST to catch bid amounts)
+    dp.include_router(auction.router)
 
     # Register startup/shutdown handlers
     dp.startup.register(on_startup)

@@ -13,7 +13,7 @@ router = Router()
 
 async def handle_deep_link(message: Message, param: str, state: FSMContext):
     """Handle deep link parameter"""
-    # Parse parameter: lot_{lot_id} or buy_{lot_id}
+    # Parse parameter: lot_{lot_id}, buy_{lot_id}, or contact_{lot_id}
     if param.startswith("lot_"):
         lot_id = int(param.replace("lot_", ""))
         # Trigger participate handler
@@ -35,9 +35,9 @@ async def handle_deep_link(message: Message, param: str, state: FSMContext):
         from handlers.auction import handle_participate
         await handle_participate(fake_callback, state)
 
-    elif param.startswith("buy_"):
-        lot_id = int(param.replace("buy_", ""))
-        # Trigger buy handler
+    elif param.startswith("contact_"):
+        lot_id = int(param.replace("contact_", ""))
+        # Trigger contact seller handler
         from aiogram.types import CallbackQuery
 
         class FakeCallback:
@@ -49,11 +49,11 @@ async def handle_deep_link(message: Message, param: str, state: FSMContext):
             async def answer(self, text=None, show_alert=False):
                 pass
 
-        fake_callback = FakeCallback(message, f"buy:{lot_id}")
+        fake_callback = FakeCallback(message, f"contact_seller:{lot_id}")
 
-        # Import and call buy handler
-        from handlers.auction import handle_buy
-        await handle_buy(fake_callback, state)
+        # Import and call contact seller handler
+        from handlers.auction import handle_contact_seller
+        await handle_contact_seller(fake_callback, state)
 
 
 @router.message(CommandStart())
